@@ -2,13 +2,18 @@ import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
-  Wallet,
+  Package,
+  ShoppingCart,
   Smartphone,
   Truck,
-  Package,
+  Store,
+  Coins,
   CreditCard,
   Landmark,
+  PiggyBank,
   TrendingUp,
+  FileText,
+  Settings,
   LogOut,
   Menu,
   X,
@@ -18,13 +23,18 @@ import { TID } from "@/constants/testIds/app";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, key: "dashboard", end: true },
-  { to: "/accounts", label: "Accounts", icon: Wallet, key: "accounts" },
+  { to: "/stock", label: "Mobile Stock", icon: Package, key: "stock" },
+  { to: "/purchases", label: "Purchases", icon: ShoppingCart, key: "purchases" },
   { to: "/retail", label: "Retail Sales", icon: Smartphone, key: "retail" },
-  { to: "/wholesale", label: "Wholesale", icon: Truck, key: "wholesale" },
-  { to: "/stock", label: "Stock", icon: Package, key: "stock" },
+  { to: "/wholesale", label: "Wholesale Supply", icon: Truck, key: "wholesale" },
+  { to: "/customers", label: "Customers / Shops", icon: Store, key: "customers" },
+  { to: "/payments", label: "Payments", icon: Coins, key: "payments" },
   { to: "/credit-cards", label: "Credit Cards", icon: CreditCard, key: "credit-cards" },
-  { to: "/poonji", label: "Fixed Poonji", icon: Landmark, key: "poonji" },
-  { to: "/profit", label: "Profit", icon: TrendingUp, key: "profit" },
+  { to: "/accounts", label: "Cash & Bank", icon: Landmark, key: "accounts" },
+  { to: "/poonji", label: "Fixed Poonji", icon: PiggyBank, key: "poonji" },
+  { to: "/profit", label: "Profit & Loss", icon: TrendingUp, key: "profit" },
+  { to: "/reports", label: "Reports", icon: FileText, key: "reports" },
+  { to: "/settings", label: "Settings", icon: Settings, key: "settings" },
 ];
 
 export default function Layout() {
@@ -39,7 +49,7 @@ export default function Layout() {
         </div>
         <div className="text-xs text-slate-400 mt-1">Balance & Profit</div>
       </div>
-      <nav className="flex-1 px-3 py-4 space-y-1">
+      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
         {NAV.map((item) => {
           const Icon = item.icon;
           return (

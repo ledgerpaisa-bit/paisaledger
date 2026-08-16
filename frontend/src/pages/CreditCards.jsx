@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import api, { apiError } from "@/lib/api";
 import { formatINR, formatDate, todayISO } from "@/lib/format";
@@ -20,8 +21,9 @@ export default function CreditCards() {
     api.get("/accounts", { params: { active: true } }).then((r) => setAccounts(r.data)).catch(() => {});
   };
   useEffect(() => { load(); }, []);
-
-  const loadTxns = (id) => api.get(`/creditcards/${id}/transactions`).then((r) => setTxns((t) => ({ ...t, [id]: r.data }))).catch(() => {});
+  const [searchParams] = useSearchParams();
+  useEffect(() => { if (searchParams.get("new") === "1") setAddOpen(true); }, [searchParams]);
+  const loadTxns = (id) => { api.get(`/creditcards/${id}/transactions`).then((r) => setTxns((t) => ({ ...t, [id]: r.data }))).catch(() => {}); };
 
   const addCard = async (e) => { e.preventDefault(); try { await api.post("/creditcards", { ...card, limit: Number(card.limit || 0) }); toast.success("Card added"); setAddOpen(false); setCard({ name: "", bank_name: "", last4: "", limit: "", notes: "" }); load(); } catch (err) { toast.error(apiError(err)); } };
   const addTxn = async (e) => {

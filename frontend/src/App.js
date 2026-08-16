@@ -14,6 +14,7 @@ import Stock from "@/pages/Stock";
 import CreditCards from "@/pages/CreditCards";
 import Poonji from "@/pages/Poonji";
 import Profit from "@/pages/Profit";
+import Settings from "@/pages/Settings";
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -48,11 +49,16 @@ function App() {
               <Route path="accounts" element={<Accounts />} />
               <Route path="accounts/:id" element={<AccountLedger />} />
               <Route path="retail" element={<Retail />} />
-              <Route path="wholesale" element={<Wholesale />} />
               <Route path="stock" element={<Stock />} />
+              <Route path="purchases" element={<Stock />} />
+              <Route path="wholesale" element={<Wholesale defaultTab="supplies" />} />
+              <Route path="customers" element={<Wholesale defaultTab="customers" />} />
+              <Route path="payments" element={<Wholesale defaultTab="payments" />} />
               <Route path="credit-cards" element={<CreditCards />} />
               <Route path="poonji" element={<Poonji />} />
               <Route path="profit" element={<Profit />} />
+              <Route path="reports" element={<Profit />} />
+              <Route path="settings" element={<Settings />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

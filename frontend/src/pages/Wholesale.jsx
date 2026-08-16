@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import api, { apiError } from "@/lib/api";
 import { formatINR, formatDate, todayISO } from "@/lib/format";
@@ -6,8 +7,8 @@ import { PageHeader, Card, Button, Field, Input, Select, Textarea, Modal, Badge,
 import { TID } from "@/constants/testIds/app";
 import { Plus, Users, Truck, Banknote } from "lucide-react";
 
-export default function Wholesale() {
-  const [tab, setTab] = useState("customers");
+export default function Wholesale({ defaultTab = "customers" }) {
+  const [tab, setTab] = useState(defaultTab);
   const [customers, setCustomers] = useState([]);
   const [supplies, setSupplies] = useState([]);
   const [payments, setPayments] = useState([]);
@@ -28,6 +29,14 @@ export default function Wholesale() {
     api.get("/accounts", { params: { active: true } }).then((r) => setAccounts(r.data)).catch(() => {});
   };
   useEffect(() => { load(); }, []);
+  const [searchParams] = useSearchParams();
+  useEffect(() => {
+    if (searchParams.get("new") === "1") {
+      if (defaultTab === "payments") setPayOpen(true);
+      else if (defaultTab === "supplies") setSupplyOpen(true);
+      else setCustOpen(true);
+    }
+  }, [searchParams]);
 
   const totalOutstanding = customers.reduce((s, c) => s + (c.outstanding || 0), 0);
 

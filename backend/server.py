@@ -741,13 +741,21 @@ async def dashboard_summary(user: dict = Depends(get_current_user)):
     fixed_poonji = round(sum(e["amount"] for e in poonji_entries), 2)
 
     # stock
-    stock_items = await db.stock.find({"status": "in_stock"}).to_list(10000)
-    stock_value = round(sum(i["purchase_price"] for i in stock_items), 2)
+    all_stock = await db.stock.find({}).to_list(20000)
+    in_stock = [i for i in all_stock if i.get("status") == "in_stock"]
+    stock_value = round(sum(i["purchase_price"] for i in in_stock), 2)
+    total_purchase = round(sum(i["purchase_price"] for i in all_stock), 2)
 
-    # profit
+    # credit limits
+    credit_limit_total = round(sum(c.get("limit", 0) for c in cards), 2)
+    available_credit_limit = round(credit_limit_total - cc_outstanding, 2)
+
+    # sales / profit
     sales = await db.sales.find({}).to_list(20000)
     retail_profit = round(sum(s["profit"] for s in sales), 2)
+    retail_sales_total = round(sum(s["sale_price"] for s in sales), 2)
     wholesale_profit = round(sum(s.get("profit", 0) for s in supplies), 2)
+    wholesale_sales_total = round(sum(s["amount"] for s in supplies), 2)
     total_profit = round(retail_profit + wholesale_profit, 2)
 
     return {
@@ -761,11 +769,17 @@ async def dashboard_summary(user: dict = Depends(get_current_user)):
         "cash_accounts": [a for a in accounts if a["type"] == "cash"],
         "wholesale_receivable": receivable,
         "credit_card_outstanding": cc_outstanding,
+        "credit_limit_total": credit_limit_total,
+        "available_credit_limit": available_credit_limit,
         "fixed_poonji": fixed_poonji,
         "stock_value": stock_value,
-        "stock_count": len(stock_items),
+        "stock_count": len(in_stock),
+        "total_stock_units": len(in_stock),
+        "total_purchase": total_purchase,
         "retail_profit": retail_profit,
+        "retail_sales_total": retail_sales_total,
         "wholesale_profit": wholesale_profit,
+        "wholesale_sales_total": wholesale_sales_total,
         "total_profit": total_profit,
         "total_sales": len(sales),
     }

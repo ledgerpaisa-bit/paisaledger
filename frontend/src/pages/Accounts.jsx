@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import api, { apiError } from "@/lib/api";
 import { formatINR, todayISO } from "@/lib/format";
@@ -27,6 +27,10 @@ export default function Accounts() {
 
   const load = () => api.get("/accounts").then((r) => setAccounts(r.data)).catch(() => {});
   useEffect(() => { load(); }, []);
+  const [searchParams] = useSearchParams();
+  useEffect(() => {
+    if (searchParams.get("new") === "1") { setEditing(null); setForm(emptyForm); setFormOpen(true); }
+  }, [searchParams]);
 
   const openNew = () => { setEditing(null); setForm(emptyForm); setFormOpen(true); };
   const openEdit = (a) => {

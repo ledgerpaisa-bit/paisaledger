@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import api, { apiError } from "@/lib/api";
 import { formatINR, formatDate, todayISO } from "@/lib/format";
@@ -15,6 +16,8 @@ export default function Stock() {
 
   const load = () => api.get("/stock").then((r) => setItems(r.data)).catch(() => {});
   useEffect(() => { load(); }, []);
+  const [searchParams] = useSearchParams();
+  useEffect(() => { if (searchParams.get("new") === "1") setOpen(true); }, [searchParams]);
 
   const submit = async (e) => {
     e.preventDefault();
