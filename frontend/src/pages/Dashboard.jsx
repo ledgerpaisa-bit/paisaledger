@@ -81,6 +81,7 @@ export default function Dashboard() {
     { label: "Receive Payment", icon: Coins, to: "/payments?new=1", tid: "qa-receive-payment" },
     { label: "Add Cash/Bank/UPI", icon: Landmark, to: "/accounts?new=1", tid: "qa-add-account" },
     { label: "Add Credit Card", icon: CreditCard, to: "/credit-cards?new=1", tid: "qa-add-card" },
+    { label: "Pay Credit Card Bill", icon: Coins, to: "/credit-cards?pay=1", tid: "qa-pay-card-bill" },
     { label: "Add Fixed Poonji", icon: PiggyBank, to: "/poonji?new=1", tid: "qa-add-poonji" },
   ];
 
