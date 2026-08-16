@@ -7,11 +7,12 @@ import { ArrowLeft } from "lucide-react";
 
 const TYPE_LABELS = {
   opening: "Opening", retail_sale: "Retail Sale", wholesale_payment: "Wholesale Payment",
-  transfer_in: "Transfer In", transfer_out: "Transfer Out", adjustment: "Adjustment", cc_payment: "Card Payment",
+  purchase: "Purchase", transfer_in: "Transfer In", transfer_out: "Transfer Out",
+  adjustment: "Adjustment", cc_payment: "Card Payment",
 };
 const TYPE_TONE = {
-  opening: "slate", retail_sale: "green", wholesale_payment: "green", transfer_in: "blue",
-  transfer_out: "amber", adjustment: "violet", cc_payment: "red",
+  opening: "slate", retail_sale: "green", wholesale_payment: "green", purchase: "red",
+  transfer_in: "blue", transfer_out: "amber", adjustment: "violet", cc_payment: "red",
 };
 
 export default function AccountLedger() {

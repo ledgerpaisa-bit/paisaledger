@@ -144,6 +144,9 @@ class StockCreate(BaseModel):
     purchase_price: float
     date: Optional[str] = None
     notes: Optional[str] = None
+    payment_method: Optional[Literal["account", "credit_card", "poonji", "none"]] = "none"
+    account_id: Optional[str] = None
+    card_id: Optional[str] = None
 
 
 class WholesaleCustomerCreate(BaseModel):
@@ -493,17 +496,55 @@ async def list_stock(status: Optional[str] = None, user: dict = Depends(get_curr
 
 @api_router.post("/stock")
 async def create_stock(data: StockCreate, user: dict = Depends(get_current_user)):
+    amount = round(data.purchase_price, 2)
+    pm = data.payment_method or "none"
     item = {
         "id": new_id(),
         "mobile_model": data.mobile_model,
         "imei": data.imei,
-        "purchase_price": round(data.purchase_price, 2),
+        "purchase_price": amount,
         "status": "in_stock",
         "sale_id": None,
+        "payment_method": pm,
+        "account_id": data.account_id if pm == "account" else None,
+        "card_id": data.card_id if pm == "credit_card" else None,
+        "poonji_id": None,
         "date": data.date or now_iso(),
         "notes": data.notes,
         "created_at": now_iso(),
     }
+    label = f"Stock purchase: {data.mobile_model}" + (f" (IMEI {data.imei})" if data.imei else "")
+
+    if pm == "account":
+        if not data.account_id:
+            raise HTTPException(status_code=400, detail="Select an account for this purchase")
+        # Debits Cash/Bank/UPI (Paisa decreases). Raises if insufficient balance.
+        await record_transaction(
+            data.account_id, "purchase", label, amount, "debit",
+            reference_id=item["id"], date=item["date"],
+        )
+    elif pm == "credit_card":
+        if not data.card_id:
+            raise HTTPException(status_code=400, detail="Select a credit card for this purchase")
+        card = await db.credit_cards.find_one({"id": data.card_id})
+        if not card:
+            raise HTTPException(status_code=404, detail="Credit card not found")
+        new_out = round(card["outstanding"] + amount, 2)
+        await db.credit_card_txns.insert_one({
+            "id": new_id(), "card_id": data.card_id, "kind": "spend",
+            "amount": amount, "account_id": None, "description": label,
+            "date": item["date"], "outstanding_after": new_out, "created_at": now_iso(),
+        })
+        # Increases this card's outstanding; Cash/Bank/UPI/Paisa unchanged.
+        await db.credit_cards.update_one({"id": data.card_id}, {"$set": {"outstanding": new_out}})
+    elif pm == "poonji":
+        pid = new_id()
+        await db.poonji.insert_one({
+            "id": pid, "amount": amount, "description": label,
+            "date": item["date"], "created_at": now_iso(),
+        })
+        item["poonji_id"] = pid
+
     await db.stock.insert_one(item)
     return clean(await db.stock.find_one({"id": item["id"]}))
 
@@ -515,6 +556,11 @@ async def delete_stock(item_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Item not found")
     if item.get("status") == "sold":
         raise HTTPException(status_code=400, detail="Cannot delete a sold item")
+    if item.get("payment_method") not in (None, "none"):
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot delete a purchase that has a recorded payment — it would break the audit ledger.",
+        )
     await db.stock.delete_one({"id": item_id})
     return {"success": True}
 
