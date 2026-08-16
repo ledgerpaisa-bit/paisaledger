@@ -7,14 +7,15 @@ import { TID } from "@/constants/testIds/app";
 import { Smartphone } from "lucide-react";
 
 export default function Login() {
-  const { user, login } = useAuth();
+  const { user, needsSetup, login } = useAuth();
   const navigate = useNavigate();
-  const [email, setEmail] = useState("rahuldrrr@gmail.com");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   if (user) return <Navigate to="/" replace />;
+  if (needsSetup === true) return <Navigate to="/setup" replace />;
 
   const submit = async (e) => {
     e.preventDefault();
@@ -35,7 +36,6 @@ export default function Login() {
 
   return (
     <div className="min-h-screen grid lg:grid-cols-2 bg-slate-50">
-      {/* Left: form */}
       <div className="flex items-center justify-center p-6 lg:p-16">
         <div className="w-full max-w-sm">
           <div className="flex items-center gap-2 mb-10">
@@ -46,9 +46,7 @@ export default function Login() {
               MOBILE<span className="text-blue-600">TRACKER</span>
             </div>
           </div>
-          <h1 className="font-display font-black text-3xl text-slate-900 tracking-tight">
-            Sign in
-          </h1>
+          <h1 className="font-display font-black text-3xl text-slate-900 tracking-tight">Sign in</h1>
           <p className="text-sm text-slate-500 mt-2 mb-8">
             Access your business balance & profit console.
           </p>
@@ -62,6 +60,7 @@ export default function Login() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
+                autoComplete="username"
                 className="w-full h-11 px-3 rounded-md border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600 transition-colors"
                 placeholder="you@example.com"
               />
@@ -74,6 +73,7 @@ export default function Login() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
+                autoComplete="current-password"
                 className="w-full h-11 px-3 rounded-md border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600 transition-colors"
                 placeholder="••••••••"
               />
@@ -95,7 +95,6 @@ export default function Login() {
         </div>
       </div>
 
-      {/* Right: visual */}
       <div className="hidden lg:block relative bg-slate-900">
         <img
           src="https://images.unsplash.com/photo-1595411425732-e69c1abe2763?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNzl8MHwxfHNlYXJjaHwyfHxhYnN0cmFjdCUyMG1pbmltYWxpc3QlMjBnZW9tZXRyeXxlbnwwfHx8fDE3ODY4NjA5NDR8MA&ixlib=rb-4.1.0&q=85"

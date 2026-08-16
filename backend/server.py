@@ -90,6 +90,12 @@ class LoginInput(BaseModel):
     password: str
 
 
+class SetupInput(BaseModel):
+    email: EmailStr
+    password: str
+    name: Optional[str] = None
+
+
 class AccountCreate(BaseModel):
     type: Literal["cash", "bank", "upi"]
     name: str
@@ -234,6 +240,37 @@ def clean(doc: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Auth routes
 # ---------------------------------------------------------------------------
+@api_router.get("/auth/setup-status")
+async def setup_status():
+    count = await db.users.count_documents({})
+    return {"needs_setup": count == 0}
+
+
+@api_router.post("/auth/setup")
+async def setup_owner(data: SetupInput):
+    count = await db.users.count_documents({})
+    if count > 0:
+        raise HTTPException(status_code=409, detail="Owner account already exists. Please sign in.")
+    if len(data.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters long")
+    email = data.email.lower()
+    user = {
+        "id": new_id(),
+        "email": email,
+        "password_hash": hash_password(data.password),
+        "name": (data.name or "").strip() or "Owner",
+        "role": "owner",
+        "created_at": now_iso(),
+    }
+    await db.users.insert_one(user)
+    token = create_access_token(user["id"], user["email"])
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {"id": user["id"], "email": user["email"], "name": user["name"]},
+    }
+
+
 @api_router.post("/auth/login")
 async def login(data: LoginInput):
     email = data.email.lower()
@@ -774,26 +811,8 @@ async def startup():
     await db.accounts.create_index("id", unique=True)
     await db.transactions.create_index("account_id")
     await db.users.create_index("email", unique=True)
-
-    admin_email = os.environ["ADMIN_EMAIL"].lower()
-    admin_password = os.environ["ADMIN_PASSWORD"]
-    admin_name = os.environ.get("ADMIN_NAME", "Owner")
-    existing = await db.users.find_one({"email": admin_email})
-    if existing is None:
-        await db.users.insert_one({
-            "id": new_id(),
-            "email": admin_email,
-            "password_hash": hash_password(admin_password),
-            "name": admin_name,
-            "role": "owner",
-            "created_at": now_iso(),
-        })
-        logger.info(f"Seeded owner account: {admin_email}")
-    elif not verify_password(admin_password, existing["password_hash"]):
-        await db.users.update_one(
-            {"email": admin_email},
-            {"$set": {"password_hash": hash_password(admin_password)}},
-        )
+    # No owner is seeded. The first owner is created via the /api/auth/setup
+    # first-time setup flow, so no password is ever hardcoded or exposed.
 
 
 @app.on_event("shutdown")
