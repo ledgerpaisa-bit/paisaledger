@@ -5,16 +5,34 @@ import api, { apiError } from "@/lib/api";
 import { formatINR, formatDate, todayISO } from "@/lib/format";
 import { PageHeader, Card, Button, Field, Input, Select, Textarea, Modal, Badge, EmptyState } from "@/components/shared";
 import { TID } from "@/constants/testIds/app";
-import { Plus, CreditCard as CardIcon, Coins } from "lucide-react";
+import { Plus, CreditCard as CardIcon, Coins, Pencil } from "lucide-react";
+
+const STATUS = {
+  paid: { tone: "green", label: "Paid" },
+  partially_paid: { tone: "amber", label: "Partially Paid" },
+  due: { tone: "blue", label: "Due" },
+  overdue: { tone: "red", label: "Overdue" },
+};
+const emptyCard = { name: "", bank_name: "", last4: "", limit: "", opening_outstanding: "", statement_date: "", due_date: "", min_due: "", allow_over_limit: false, notes: "" };
+
+function UtilBar({ pct }) {
+  const color = pct > 70 ? "bg-rose-500" : pct > 30 ? "bg-amber-500" : "bg-emerald-500";
+  return (
+    <div className="mt-3">
+      <div className="flex justify-between text-xs text-slate-500 mb-1"><span>Utilization</span><span className="font-mono">{pct}%</span></div>
+      <div className="h-2 rounded-full bg-slate-100 overflow-hidden"><div className={`h-full ${color}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div>
+    </div>
+  );
+}
 
 export default function CreditCards() {
   const navigate = useNavigate();
   const [cards, setCards] = useState([]);
   const [accounts, setAccounts] = useState([]);
-  const [txns, setTxns] = useState({});
   const [addOpen, setAddOpen] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const [txnCard, setTxnCard] = useState(null);
-  const [card, setCard] = useState({ name: "", bank_name: "", last4: "", limit: "", notes: "" });
+  const [card, setCard] = useState(emptyCard);
   const [txn, setTxn] = useState({ kind: "spend", amount: "", account_id: "", description: "", date: todayISO() });
   const [payOpen, setPayOpen] = useState(false);
   const [pay, setPay] = useState({ card_id: "", account_id: "", amount: "", date: todayISO() });
@@ -27,17 +45,42 @@ export default function CreditCards() {
   useEffect(() => { load(); }, []);
   const [searchParams] = useSearchParams();
   useEffect(() => {
-    if (searchParams.get("new") === "1") setAddOpen(true);
+    if (searchParams.get("new") === "1") { setEditingId(null); setCard(emptyCard); setAddOpen(true); }
     if (searchParams.get("pay") === "1") setPayOpen(true);
   }, [searchParams]);
-  const loadTxns = (id) => { api.get(`/creditcards/${id}/transactions`).then((r) => setTxns((t) => ({ ...t, [id]: r.data }))).catch(() => {}); };
 
-  const addCard = async (e) => { e.preventDefault(); try { await api.post("/creditcards", { ...card, limit: Number(card.limit || 0) }); toast.success("Card added"); setAddOpen(false); setCard({ name: "", bank_name: "", last4: "", limit: "", notes: "" }); load(); } catch (err) { toast.error(apiError(err)); } };
+  const openEdit = (c) => {
+    setEditingId(c.id);
+    setCard({ name: c.name, bank_name: c.bank_name || "", last4: c.last4 || "", limit: c.limit,
+      opening_outstanding: "", statement_date: c.statement_date || "", due_date: c.due_date || "",
+      min_due: c.min_due ?? "", allow_over_limit: !!c.allow_over_limit, notes: c.notes || "" });
+    setAddOpen(true);
+  };
+
+  const saveCard = async (e) => {
+    e.preventDefault();
+    try {
+      if (editingId) {
+        await api.put(`/creditcards/${editingId}`, { name: card.name, bank_name: card.bank_name, last4: card.last4,
+          limit: Number(card.limit || 0), statement_date: card.statement_date || null, due_date: card.due_date || null,
+          min_due: Number(card.min_due || 0), allow_over_limit: card.allow_over_limit, notes: card.notes });
+        toast.success("Card updated");
+      } else {
+        await api.post("/creditcards", { ...card, limit: Number(card.limit || 0), opening_outstanding: Number(card.opening_outstanding || 0),
+          min_due: Number(card.min_due || 0), statement_date: card.statement_date || null, due_date: card.due_date || null });
+        toast.success("Card added");
+      }
+      setAddOpen(false); setCard(emptyCard); setEditingId(null); load();
+    } catch (err) { toast.error(apiError(err)); }
+  };
+
   const addTxn = async (e) => {
     e.preventDefault();
     try {
-      await api.post(`/creditcards/${txnCard.id}/transactions`, { ...txn, amount: Number(txn.amount), account_id: txn.kind === "payment" ? txn.account_id : null, date: txn.date ? new Date(txn.date).toISOString() : null });
-      toast.success(txn.kind === "spend" ? "Spend recorded" : "Payment recorded — account debited");
+      await api.post(`/creditcards/${txnCard.id}/transactions`, { kind: txn.kind, amount: Number(txn.amount),
+        account_id: txn.kind === "payment" ? txn.account_id : null, description: txn.description,
+        date: txn.date ? new Date(txn.date).toISOString() : null });
+      toast.success("Transaction recorded");
       setTxnCard(null); setTxn({ kind: "spend", amount: "", account_id: "", description: "", date: todayISO() }); load();
     } catch (err) { toast.error(apiError(err)); }
   };
@@ -47,12 +90,9 @@ export default function CreditCards() {
     if (!pay.card_id) return toast.error("Select a credit card");
     if (!pay.account_id) return toast.error("Select the paying account");
     try {
-      await api.post(`/creditcards/${pay.card_id}/transactions`, {
-        kind: "payment", amount: Number(pay.amount), account_id: pay.account_id,
-        description: "Credit card bill payment",
-        date: pay.date ? new Date(pay.date).toISOString() : null,
-      });
-      toast.success("Bill paid — card outstanding & account balance reduced");
+      await api.post(`/creditcards/${pay.card_id}/transactions`, { kind: "payment", amount: Number(pay.amount),
+        account_id: pay.account_id, description: "Credit card bill payment", date: pay.date ? new Date(pay.date).toISOString() : null });
+      toast.success("Bill paid — card outstanding & account reduced");
       setPayOpen(false); setPay({ card_id: "", account_id: "", amount: "", date: todayISO() }); load();
     } catch (err) { toast.error(apiError(err)); }
   };
@@ -61,57 +101,68 @@ export default function CreditCards() {
 
   return (
     <div>
-      <PageHeader title="Credit Cards" subtitle="Track card spends and payments. Payments debit a Paisa account."
-        action={<div className="flex gap-2"><Button variant="outline" onClick={() => openPay(null)} data-testid="pay-bill-open"><Coins size={16} /> Pay Bill</Button><Button onClick={() => setAddOpen(true)} data-testid={TID.addCardBtn}><Plus size={16} /> Add Card</Button></div>} />
+      <PageHeader title="Credit Cards" subtitle="Manage cards, limits, dues and bill payments."
+        action={<div className="flex gap-2"><Button variant="outline" onClick={() => openPay(null)} data-testid="pay-bill-open"><Coins size={16} /> Pay Bill</Button><Button onClick={() => { setEditingId(null); setCard(emptyCard); setAddOpen(true); }} data-testid={TID.addCardBtn}><Plus size={16} /> Add Card</Button></div>} />
 
       <Card className="p-5 mb-6"><div className="text-xs uppercase font-semibold text-slate-500">Total Outstanding</div><div className="font-mono font-semibold text-2xl text-rose-600 mt-2">{formatINR(totalOutstanding)}</div></Card>
 
-      {cards.length === 0 ? <Card><EmptyState title="No cards" subtitle="Add a credit card to track outstanding." /></Card> : (
+      {cards.length === 0 ? <Card><EmptyState title="No cards" subtitle="Add a credit card to track outstanding, limit and dues." /></Card> : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {cards.map((c) => (
-            <Card key={c.id} className="p-5">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-md bg-slate-900 flex items-center justify-center text-white"><CardIcon size={18} /></div>
-                  <div><div className="font-display font-bold text-slate-900">{c.name}</div><div className="text-xs text-slate-400">{c.bank_name || "—"}{c.last4 ? ` · ····${c.last4}` : ""}</div></div>
+          {cards.map((c) => {
+            const pct = c.limit > 0 ? Math.round((c.outstanding / c.limit) * 100) : 0;
+            const st = STATUS[c.status] || STATUS.due;
+            return (
+              <Card key={c.id} className="p-5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-md bg-slate-900 flex items-center justify-center text-white shrink-0"><CardIcon size={18} /></div>
+                    <div className="min-w-0"><div className="font-display font-bold text-slate-900 truncate">{c.name}</div><div className="text-xs text-slate-400">{c.bank_name || "—"}{c.last4 ? ` · ····${c.last4}` : ""}</div></div>
+                  </div>
+                  <Badge tone={st.tone}>{st.label}</Badge>
                 </div>
-                <div className="flex gap-2 flex-wrap justify-end">
+
+                <div className="grid grid-cols-3 gap-3 mt-4">
+                  <div><div className="text-xs text-slate-500">Outstanding</div><div className="font-mono font-semibold text-rose-600">{formatINR(c.outstanding)}</div></div>
+                  <div><div className="text-xs text-slate-500">Limit</div><div className="font-mono font-semibold text-slate-900">{formatINR(c.limit)}</div></div>
+                  <div><div className="text-xs text-slate-500">Available</div><div className="font-mono font-semibold text-teal-600">{formatINR(c.available)}</div></div>
+                </div>
+                <UtilBar pct={pct} />
+                <div className="grid grid-cols-2 gap-3 mt-3 text-xs">
+                  <div><span className="text-slate-500">Due Date: </span><span className="font-medium text-slate-800">{c.due_date ? formatDate(c.due_date) : "—"}</span></div>
+                  <div><span className="text-slate-500">Min Due: </span><span className="font-mono text-slate-800">{formatINR(c.min_due || 0)}</span></div>
+                </div>
+
+                <div className="flex gap-2 flex-wrap justify-end mt-4 pt-3 border-t border-slate-100">
                   <Button variant="outline" onClick={() => navigate(`/credit-cards/${c.id}`)} data-testid={`card-ledger-${c.id}`}>Ledger</Button>
                   <Button variant="outline" onClick={() => openPay(c.id)} data-testid={`card-pay-bill-${c.id}`}>Pay Bill</Button>
                   <Button variant="outline" onClick={() => { setTxnCard(c); setTxn({ kind: "spend", amount: "", account_id: "", description: "", date: todayISO() }); }} data-testid={TID.cardTxnBtn(c.id)}>Add Txn</Button>
+                  <Button variant="outline" onClick={() => openEdit(c)} data-testid={`card-edit-${c.id}`}><Pencil size={14} /> Edit</Button>
                 </div>
-              </div>
-              <div className="grid grid-cols-3 gap-4 mt-4">
-                <div><div className="text-xs text-slate-500">Outstanding</div><div className="font-mono font-semibold text-lg text-rose-600">{formatINR(c.outstanding)}</div></div>
-                <div><div className="text-xs text-slate-500">Limit</div><div className="font-mono font-semibold text-lg text-slate-900">{formatINR(c.limit)}</div></div>
-                <div><div className="text-xs text-slate-500">Available</div><div className="font-mono font-semibold text-lg text-teal-600">{formatINR(c.limit - c.outstanding)}</div></div>
-              </div>
-              <button onClick={() => loadTxns(c.id)} className="text-xs text-blue-600 mt-3 hover:underline">View transactions</button>
-              {txns[c.id] && (
-                <div className="mt-3 border-t border-slate-100 pt-3 space-y-2 max-h-48 overflow-y-auto">
-                  {txns[c.id].length === 0 ? <div className="text-xs text-slate-400">No transactions</div> : txns[c.id].map((t) => (
-                    <div key={t.id} className="flex items-center justify-between text-sm">
-                      <div><Badge tone={t.kind === "spend" ? "red" : "green"}>{t.kind}</Badge> <span className="text-slate-500 ml-1">{formatDate(t.date)}</span>{t.account_name && <span className="text-xs text-slate-400 ml-1">· {t.account_name}</span>}</div>
-                      <span className="font-mono">{formatINR(t.amount)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </Card>
-          ))}
+              </Card>
+            );
+          })}
         </div>
       )}
 
-      <Modal open={addOpen} onClose={() => setAddOpen(false)} title="Add Credit Card">
-        <form onSubmit={addCard} className="space-y-4">
+      <Modal open={addOpen} onClose={() => setAddOpen(false)} title={editingId ? "Edit Credit Card" : "Add Credit Card"}>
+        <form onSubmit={saveCard} className="space-y-4">
           <Field label="Card Name"><Input value={card.name} onChange={(e) => setCard({ ...card, name: e.target.value })} required placeholder="e.g. HDFC Regalia" /></Field>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Bank"><Input value={card.bank_name} onChange={(e) => setCard({ ...card, bank_name: e.target.value })} /></Field>
-            <Field label="Last 4"><Input value={card.last4} maxLength={4} onChange={(e) => setCard({ ...card, last4: e.target.value.replace(/\D/g, "") })} className="font-mono" /></Field>
+            <Field label="Bank / Provider"><Input value={card.bank_name} onChange={(e) => setCard({ ...card, bank_name: e.target.value })} /></Field>
+            <Field label="Last 4 digits" hint="Full number never stored"><Input value={card.last4} maxLength={4} onChange={(e) => setCard({ ...card, last4: e.target.value.replace(/\D/g, "") })} className="font-mono" /></Field>
           </div>
-          <Field label="Credit Limit"><Input type="number" step="0.01" value={card.limit} onChange={(e) => setCard({ ...card, limit: e.target.value })} className="font-mono" /></Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Credit Limit"><Input type="number" step="0.01" value={card.limit} onChange={(e) => setCard({ ...card, limit: e.target.value })} className="font-mono" /></Field>
+            {!editingId && <Field label="Opening Outstanding"><Input type="number" step="0.01" value={card.opening_outstanding} onChange={(e) => setCard({ ...card, opening_outstanding: e.target.value })} className="font-mono" /></Field>}
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Statement Date"><Input type="date" value={card.statement_date} onChange={(e) => setCard({ ...card, statement_date: e.target.value })} /></Field>
+            <Field label="Payment Due Date"><Input type="date" value={card.due_date} onChange={(e) => setCard({ ...card, due_date: e.target.value })} /></Field>
+          </div>
+          <Field label="Minimum Due"><Input type="number" step="0.01" value={card.min_due} onChange={(e) => setCard({ ...card, min_due: e.target.value })} className="font-mono" /></Field>
+          <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={card.allow_over_limit} onChange={(e) => setCard({ ...card, allow_over_limit: e.target.checked })} className="w-4 h-4 accent-blue-600" /> Allow over-limit transactions</label>
           <Field label="Notes"><Textarea rows={2} value={card.notes} onChange={(e) => setCard({ ...card, notes: e.target.value })} /></Field>
-          <div className="flex justify-end gap-2 pt-2"><Button type="button" variant="outline" onClick={() => setAddOpen(false)}>Cancel</Button><Button type="submit">Add</Button></div>
+          <div className="flex justify-end gap-2 pt-2"><Button type="button" variant="outline" onClick={() => setAddOpen(false)}>Cancel</Button><Button type="submit">{editingId ? "Save" : "Add"}</Button></div>
         </form>
       </Modal>
 
@@ -121,6 +172,7 @@ export default function CreditCards() {
             <Select value={txn.kind} onChange={(e) => setTxn({ ...txn, kind: e.target.value })}>
               <option value="spend">Spend (increase outstanding)</option>
               <option value="payment">Payment (decrease outstanding)</option>
+              <option value="refund">Credit / Refund (decrease outstanding)</option>
             </Select>
           </Field>
           <Field label="Amount"><Input type="number" step="0.01" value={txn.amount} onChange={(e) => setTxn({ ...txn, amount: e.target.value })} required className="font-mono" /></Field>
@@ -137,9 +189,7 @@ export default function CreditCards() {
 
       <Modal open={payOpen} onClose={() => setPayOpen(false)} title="Pay Credit Card Bill" testid="pay-bill-modal">
         <form onSubmit={payBill} className="space-y-4">
-          <p className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded p-2">
-            Paying a bill reduces the card's outstanding and the selected account balance by the same amount. It is not an expense — the original purchase was already recorded.
-          </p>
+          <p className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded p-2">Paying a bill reduces the card's outstanding and the selected account balance. It is not an expense — the original purchase was already recorded.</p>
           <Field label="Credit Card">
             <Select data-testid="pay-bill-card-select" value={pay.card_id} onChange={(e) => setPay({ ...pay, card_id: e.target.value })} required>
               <option value="">Select card</option>
@@ -152,7 +202,7 @@ export default function CreditCards() {
               {accounts.map((a) => <option key={a.id} value={a.id}>{a.name} — {formatINR(a.current_balance)}</option>)}
             </Select>
           </Field>
-          <Field label="Amount"><Input type="number" step="0.01" value={pay.amount} onChange={(e) => setPay({ ...pay, amount: e.target.value })} required className="font-mono" /></Field>
+          <Field label="Amount (full or partial)"><Input type="number" step="0.01" value={pay.amount} onChange={(e) => setPay({ ...pay, amount: e.target.value })} required className="font-mono" /></Field>
           <Field label="Date"><Input type="date" value={pay.date} onChange={(e) => setPay({ ...pay, date: e.target.value })} /></Field>
           <div className="flex justify-end gap-2 pt-2"><Button type="button" variant="outline" onClick={() => setPayOpen(false)}>Cancel</Button><Button type="submit" data-testid="pay-bill-submit">Pay Bill</Button></div>
         </form>

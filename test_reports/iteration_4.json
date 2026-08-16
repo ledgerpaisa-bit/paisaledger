@@ -1,0 +1,49 @@
+{
+  "summary": "Iteration-4 validates the full Credit Card Management module (add/edit, purchase on card, over-limit toggle, pay-bill, refund, statement, dashboard aggregates, multi-card independence) on top of the existing Balance & Profit Tracker. Backend: authored /app/backend/tests/test_credit_card_module.py (13 tests, ALL PASS). Covers: (1) baseline balanced; (2) POST /api/creditcards with opening_outstanding=20000, past due_date, min_due=2000 and last4 sent as '51234' -> stored as '1234' only, outstanding=20000, available=80000, status='overdue'; (3) PUT /api/creditcards/{id} updating limit=120000 & min_due=3000 -> available recomputes to 100000; (4) POST /api/stock payment_method=credit_card 10000 -> stock_value +10000, paisa unchanged, card outstanding 30000, available 90000, A-S delta unchanged; (5) over-limit purchase rejected 400 while allow_over_limit=false; after enabling, over-limit spend accepted; (6) retail sale 12000 -> bank +12000 full, profit +2000, card outstanding unchanged; (7) pay-bill 12000 -> card 30000->18000, bank 12000->0, both ledgers updated (cc_payment txn_type in account ledger), profit unchanged; (8) over-payment 20000 vs 18000 outstanding rejected 400; refund 3000 accepted, no profit change, not tied to account; (9) GET /api/creditcards/{id}/statement returns opening_balance/purchases/charges/payments/refunds/closing_outstanding/available correctly; (10) dashboard exposes cc_outstanding/limit_total/available/utilization/upcoming_due (upcoming_due sums min_due for cards with outstanding>0); (11) second card is fully independent (separate outstanding + ledger). Frontend Playwright: logged in with qatester@example.com/Test@12345, added a card via data-testid=add-card-button with opening 20000 + past due date -> UI shows Overdue badge and masked ····1234; dashboard shows all 5 CC testids (cc-total-outstanding ₹20,000 · cc-total-available ₹3,50,000 · cc-total-limit ₹3,70,000 · cc-utilization 5.4% · cc-upcoming-due ₹2,000); qa-pay-card-bill navigates to /credit-cards?pay=1 and opens pay-bill-modal containing pay-bill-card-select / pay-bill-account-select / pay-bill-submit; per-card card-ledger-<id> opens /credit-cards/<id> with cardledger-outstanding / cardledger-available; view-statement-btn / export-csv-btn / export-pdf-btn all present; Statement panel renders opening/purchases/charges/payments/refunds/closing.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/creditcards", "issue": "opening_outstanding adds to credit_card_outstanding (a Source) with category='opening' (not classified as expense) and no corresponding Asset increase or Profit decrease -> silently breaks Assets == Sources by +opening_outstanding. Recommend either (a) treat opening as a Poonji/liability offset, or (b) exclude opening amount from cc_outstanding aggregate in dashboard_summary, or (c) require an offsetting fixed_poonji entry when opening>0."},
+      {"endpoint": "POST /api/creditcards/{id}/transactions kind=refund", "issue": "Refund reduces card_outstanding without any offsetting Asset/Profit motion -> the equation drifts by -refund_amount. Refunds should either credit an account (money back from merchant), or restore profit if refunding a prior expense-tagged spend."},
+      {"endpoint": "GET /api/creditcards vs POST /api/creditcards", "issue": "There is NO DELETE endpoint for /api/creditcards/{id}, yet the previous test_accounting_bug.py 'cleanup' calls DELETE and expects it to work (silently swallowed). Either add a soft-delete/deactivate endpoint or remove the misleading cleanup call."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "CreditCardLedger statement panel", "issue": "data-testid=\"statement-panel\" is passed to the <Card> wrapper component which does not forward it — Playwright's page.locator('[data-testid=\"statement-panel\"]').count() returns 0 even though the panel is visibly rendered. Forward data-testid in components/shared Card, or move the attribute onto a plain <div>.", "selector": "[data-testid=\"statement-panel\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Credit Card modals (Add/Edit, Pay Bill, Add Txn)", "issues": ["All date fields still use the browser's native HTML5 date picker instead of the shadcn Calendar/DatePicker component (carried over from iterations 2 & 3)."]},
+      {"screen": "Pay Bill modal (and any modal rendering <select> with a lucide/dynamic option)", "issues": ["React hydration warning: '<span> cannot be a child of <option>' — the visual-editor overlay wraps dynamic option labels in a <span>, which is invalid HTML inside <option>. Non-blocking but produces a console error on every modal open."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_credit_card_module.py",
+    "/app/test_reports/pytest/cc_module.xml"
+  ],
+  "action_items": [
+    "Decide the accounting treatment of card opening_outstanding (currently unbalances Assets==Sources by the opening amount).",
+    "Decide the accounting treatment of refunds (currently drifts equation by -refund_amount; refund into an account or restore profit).",
+    "Forward data-testid inside components/shared/Card so [data-testid=\"statement-panel\"] resolves for automated tests.",
+    "Optionally add DELETE /api/creditcards/{id} (soft-delete) so QA cleanup is real."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 1065 lines — please split into routers/{auth,accounts,cards,stock,wholesale,dashboard}.py.",
+    "list_cards loads ALL credit_card_txns into memory to compute total_paid — add index on card_id and aggregate in Mongo when volume grows.",
+    "Card status 'partially_paid' short-circuits before 'overdue' only when due_date is in the past — a partially paid overdue card is currently labelled 'overdue' (correct), but a fully paid overdue card shows 'paid' (also correct). Add unit test to lock this.",
+    "dashboard_summary now scans stock/txns/supplies/payments/sales/cards on every call — cache or aggregate in Mongo.",
+    "No ErrorBoundary at route level (carried over from iteration-2/3).",
+    "CreditCards.jsx line 56: `min_due: c.min_due || \"\"` — when API returns 0, edit form starts blank; should default to 0."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_credit_card_module.py (new — 13 tests)"
+  ],
+  "success_rate": {"backend": "100% (13/13)", "frontend": "100% of testids present and interactive; 1 minor testid-forwarding gap on statement-panel"},
+  "test_credentials": "qatester@example.com / Test@12345 (owner)",
+  "seed_data_creation": "Per test-run: QATEST_<uuid>_Bank (opening 0), QATEST_<uuid>_Visa card (limit->120000, opening 20000, past due, min_due->3000), QATEST_<uuid>_Card2 (limit 50000), one stock item purchased on card 10000 then sold retail 12000, plus over-limit spend/refund cycle, pay-bill 12000, refund 3000, generic spend 5000 on card2. Also QATESTUI_<uuid> Visa card via Playwright with opening 20000.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "The DB is heavily populated with QATEST_* leftovers and total_profit is negative (-101000) because of accumulated 'spend' expenses across iterations 3-4 with no delete-card endpoint to clean them. Always use DELTAS. When testing new CC features, note that opening_outstanding and refund both silently break Assets==Sources by their amount — do not assert absolute A==S after those two operations (assert delta invariance instead). Regression: `python -m pytest backend/tests/test_credit_card_module.py backend/tests/test_accounting_bug.py -v -o addopts=`.",
+  "rca of the issue": "No user-facing bug — the module works end-to-end (13/13 backend + full Playwright flow). Two latent accounting drifts identified: (1) opening_outstanding on a new card raises credit_card_outstanding (Source) with no offsetting Asset/Profit change — recommend Poonji offset or opening-exclusion in the dashboard aggregate; (2) refund reduces card_outstanding with no offsetting motion — recommend either refund-to-account or profit-restore. Both are business-logic decisions for main agent."
+}

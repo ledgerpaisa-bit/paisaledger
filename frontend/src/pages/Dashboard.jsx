@@ -150,6 +150,18 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* CREDIT CARDS */}
+      <div>
+        <h2 className="text-sm font-semibold text-slate-700 mb-2">Credit Cards</h2>
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+          <MiniStat label="Total Outstanding" value={data.credit_card_outstanding} tone="rose" testid="cc-total-outstanding" />
+          <MiniStat label="Total Available Limit" value={data.available_credit_limit} tone="teal" testid="cc-total-available" />
+          <MiniStat label="Total Credit Limit" value={data.credit_limit_total} tone="slate" testid="cc-total-limit" />
+          <MiniStat label="Credit Utilization" value={`${data.credit_utilization ?? 0}%`} isCount tone={(data.credit_utilization ?? 0) > 70 ? "rose" : (data.credit_utilization ?? 0) > 30 ? "amber" : "emerald"} testid="cc-utilization" />
+          <MiniStat label="Upcoming Due" value={data.upcoming_due_amount || 0} tone="amber" testid="cc-upcoming-due" />
+        </div>
+      </div>
+
       {/* ACCOUNT-WISE + QUICK ACTIONS */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card className="lg:col-span-2">

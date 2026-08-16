@@ -1,46 +1,47 @@
 # Mobile Business Balance & Profit Tracker — PRD
 
 ## Original Problem Statement
-Build the Money/Account Management functionality for a Mobile Business Balance & Profit Tracker
-(mobile phone retailer). Multiple money accounts (Cash, Bank, UPI), Account Master, account-wise
-balance + Total Paisa, retail sales linked to a payment account, wholesale receivables & payments,
-account transfers, per-account ledger with running balance, Fixed Poonji kept separate from Paisa,
-credit cards, stock, profit. Block negative balances. Full audit trail. INR formatting.
-(No pre-existing code existed — the entire app was built fresh.)
+Business finance app for a mobile phone retailer: multiple money accounts (Cash/Bank/UPI),
+account master + ledgers, retail sales, wholesale, stock/purchases, credit cards, fixed poonji,
+profit, and a dashboard with Total Paisa + account-wise balances. Built fresh (no prior code).
 
 ## Architecture
 - Backend: FastAPI (`/app/backend/server.py`), MongoDB (motor). All routes under `/api`.
-- Auth: JWT (bcrypt), token in login response body, sent via `Authorization: Bearer`. Owner seeded on startup.
-- Frontend: React (CRA + craco), Tailwind, shadcn-style components, lucide-react icons, sonner toasts.
-  Swiss high-contrast design. INR via `Intl.NumberFormat('en-IN')`.
-- Core money engine: `record_transaction()` — every movement writes a `transactions` ledger row,
-  updates account `current_balance`, enforces non-negative unless `allow_negative`.
+- Auth: JWT (bcrypt). First-time SETUP flow (no seeded owner); token in body via Authorization: Bearer.
+- Frontend: React (CRA/craco), Tailwind, shadcn-style shared components, lucide-react, sonner.
+- Core money engine `record_transaction()` writes an account ledger row, updates balance,
+  enforces non-negative unless account allows it.
 
-## User Personas
-- Business owner (single user) tracking daily mobile sales, balances, receivables and profit.
+## Accounting model (Assets = Sources)
+- Assets = stock_value + total_paisa. Sources = credit_card_outstanding + fixed_poonji + total_profit.
+- total_profit = retail_profit + wholesale_profit - total_expenses.
+- total_expenses = generic card spends (kind=spend, category=expense) + card opening_outstanding
+  MINUS refunds. Stock-purchase card charges (category=purchase) are NOT expenses (backed by stock).
+- Card bill payment: debits account + reduces card outstanding, NOT an expense/profit change.
+- Fixed Poonji kept separate from Paisa; wholesale receivable excluded from Paisa until paid.
 
-## Core Requirements (static)
-- Total Paisa = sum of active account balances. Fixed Poonji NOT counted. Wholesale receivable NOT counted until paid.
-- Transfers move money between own accounts without changing Total Paisa.
-- Every money movement = one transaction; adjustments create adjustment transactions (audit trail).
+## Implemented (through 2026-06)
+- Owner setup/login/logout, protected routes, Settings page.
+- Accounts (Cash/Bank/UPI): CRUD, activate/deactivate, adjust, transfers, per-account ledger w/ filters.
+- Dashboard: Core Business Position equation, 5 summary cards, Business Volume, Liquidity & Limits,
+  Credit Cards strip (outstanding/available/limit/utilization%/upcoming due), account-wise balances, Quick Actions.
+- Retail sales (receiving account + IMEI + profit + stock link). Wholesale (customers/supplies/payments).
+- Purchases/Stock with payment method (Cash/Bank/UPI/Credit Card/Fixed Poonji) + over-limit guard.
+- Credit Card Management: multiple cards; fields (limit, opening outstanding, statement date, due date,
+  min due, over-limit, notes); add/edit; utilization bar; status Paid/Partially/Due/Overdue; per-card ledger
+  w/ running outstanding; statement (opening/purchases/charges/payments/refunds/closing/available) + CSV/PDF;
+  spend/payment/refund with validations; Pay Bill (Quick Action + per card).
+- Fixed Poonji, Profit & Loss report.
 
-## Implemented (2026-08-16)
-- JWT login (owner rahuldrrr@gmail.com).
-- Account Master: create/edit/activate-deactivate, opening balance, last4, notes, allow-negative.
-- Dashboard: Total Paisa hero, Cash/Bank/UPI totals, account-wise breakdown (click → ledger),
-  receivable, credit card outstanding, stock value, fixed poonji, total profit.
-- Retail sales (mobile+IMEI+payment account, optional stock pick), credits account.
-- Wholesale: customers, supplies (receivable), payments into account.
-- Account Transfers (two-legged ledger entries).
-- Per-account Ledger with running balance + date/type filters.
-- Stock, Credit Cards (spend/payment), Fixed Poonji, Profit report.
-- Negative-balance protection. Backend tested 100% (13/13), frontend 95%.
+## Verified
+- Testing agent iterations 1–4 all pass (100%). Accounting equation holds through purchase→sale→
+  pay-bill, opening outstanding, and refund flows (self-verified delta A-S = 0).
 
-## Backlog / Remaining
-- P1: Edit/delete retail sales & wholesale supplies with reversing transactions.
-- P1: Brute-force lockout / rate limiting on login; restrict CORS origins.
-- P2: Split server.py into routers; CSV/PDF export of ledgers & profit; date-range dashboard.
-- P2: Charts on dashboard (recharts) for daily sales/profit trend.
+## Backlog (P1/P2)
+- P1: DELETE/soft-delete + reverse for cards, purchases, card txns.
+- P1: Route-level ErrorBoundary; login rate-limiting; restrict CORS.
+- P2: Split server.py into routers; Mongo aggregation/caching for dashboard & list_cards.
+- P2: shadcn DatePicker instead of native date inputs; due-date reminders; ledger search.
 
-## Next tasks
-- Await user feedback on the first build; then prioritize edit/reversal flows and exports.
+## Notes
+- Single-owner app; DB is global (not user-scoped). Testing uses a temp QA user + delta checks.

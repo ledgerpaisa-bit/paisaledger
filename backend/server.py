@@ -176,11 +176,28 @@ class CreditCardCreate(BaseModel):
     bank_name: Optional[str] = None
     last4: Optional[str] = None
     limit: float = 0.0
+    opening_outstanding: float = 0.0
+    statement_date: Optional[str] = None
+    due_date: Optional[str] = None
+    min_due: float = 0.0
+    allow_over_limit: bool = False
+    notes: Optional[str] = None
+
+
+class CreditCardUpdate(BaseModel):
+    name: Optional[str] = None
+    bank_name: Optional[str] = None
+    last4: Optional[str] = None
+    limit: Optional[float] = None
+    statement_date: Optional[str] = None
+    due_date: Optional[str] = None
+    min_due: Optional[float] = None
+    allow_over_limit: Optional[bool] = None
     notes: Optional[str] = None
 
 
 class CreditCardTxnInput(BaseModel):
-    kind: Literal["spend", "payment"]
+    kind: Literal["spend", "payment", "refund"]
     amount: float
     account_id: Optional[str] = None  # required for payment
     description: Optional[str] = None
@@ -529,6 +546,9 @@ async def create_stock(data: StockCreate, user: dict = Depends(get_current_user)
         card = await db.credit_cards.find_one({"id": data.card_id})
         if not card:
             raise HTTPException(status_code=404, detail="Credit card not found")
+        available = round(card.get("limit", 0) - card["outstanding"], 2)
+        if not card.get("allow_over_limit", False) and amount > available:
+            raise HTTPException(status_code=400, detail=f"Purchase exceeds available credit limit (₹{available:.0f}). Enable over-limit for this card to allow it.")
         new_out = round(card["outstanding"] + amount, 2)
         await db.credit_card_txns.insert_one({
             "id": new_id(), "card_id": data.card_id, "kind": "spend",
@@ -673,7 +693,31 @@ async def create_wholesale_payment(data: WholesalePaymentInput, user: dict = Dep
 @api_router.get("/creditcards")
 async def list_cards(user: dict = Depends(get_current_user)):
     cards = await db.credit_cards.find({}).sort("created_at", -1).to_list(1000)
-    return [clean(c) for c in cards]
+    txns = await db.credit_card_txns.find({}).to_list(50000)
+    paid_by = {}
+    for t in txns:
+        if t["kind"] in ("payment", "refund"):
+            paid_by[t["card_id"]] = paid_by.get(t["card_id"], 0) + t["amount"]
+    today = datetime.now(timezone.utc).date().isoformat()
+    out = []
+    for c in cards:
+        c.pop("_id", None)
+        o = c.get("outstanding", 0)
+        c["available"] = round(c.get("limit", 0) - o, 2)
+        paid = paid_by.get(c["id"], 0)
+        due = c.get("due_date")
+        if o <= 0.001:
+            status = "paid"
+        elif due and due < today:
+            status = "overdue"
+        elif paid > 0:
+            status = "partially_paid"
+        else:
+            status = "due"
+        c["status"] = status
+        c["total_paid"] = round(paid, 2)
+        out.append(c)
+    return out
 
 
 @api_router.post("/creditcards")
@@ -682,14 +726,40 @@ async def create_card(data: CreditCardCreate, user: dict = Depends(get_current_u
         "id": new_id(),
         "name": data.name,
         "bank_name": data.bank_name,
-        "last4": data.last4,
+        "last4": (data.last4 or "")[-4:] or None,
         "limit": round(data.limit, 2),
         "outstanding": 0.0,
+        "statement_date": data.statement_date,
+        "due_date": data.due_date,
+        "min_due": round(data.min_due, 2),
+        "allow_over_limit": data.allow_over_limit,
         "notes": data.notes,
         "created_at": now_iso(),
     }
     await db.credit_cards.insert_one(card)
+    if data.opening_outstanding and data.opening_outstanding > 0:
+        amt = round(data.opening_outstanding, 2)
+        await db.credit_card_txns.insert_one({
+            "id": new_id(), "card_id": card["id"], "kind": "spend",
+            "amount": amt, "account_id": None, "description": "Opening outstanding",
+            "category": "expense", "date": now_iso(), "outstanding_after": amt,
+            "created_at": now_iso(),
+        })
+        await db.credit_cards.update_one({"id": card["id"]}, {"$set": {"outstanding": amt}})
     return clean(await db.credit_cards.find_one({"id": card["id"]}))
+
+
+@api_router.put("/creditcards/{card_id}")
+async def update_card(card_id: str, data: CreditCardUpdate, user: dict = Depends(get_current_user)):
+    updates = {k: v for k, v in data.model_dump().items() if v is not None}
+    if "last4" in updates:
+        updates["last4"] = (updates["last4"] or "")[-4:] or None
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    res = await db.credit_cards.update_one({"id": card_id}, {"$set": updates})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Card not found")
+    return clean(await db.credit_cards.find_one({"id": card_id}))
 
 
 @api_router.get("/creditcards/{card_id}/transactions")
@@ -740,8 +810,18 @@ async def add_card_txn(card_id: str, data: CreditCardTxnInput, user: dict = Depe
     if data.kind == "payment" and not data.account_id:
         raise HTTPException(status_code=400, detail="Payment requires a paying account")
 
-    delta = data.amount if data.kind == "spend" else -data.amount
-    new_out = round(card["outstanding"] + delta, 2)
+    outstanding = card["outstanding"]
+    if data.kind == "spend":
+        available = round(card.get("limit", 0) - outstanding, 2)
+        if not card.get("allow_over_limit", False) and data.amount > available:
+            raise HTTPException(status_code=400, detail=f"Spend exceeds available credit limit (₹{available:.0f}). Enable over-limit to allow it.")
+        new_out = round(outstanding + data.amount, 2)
+    else:  # payment or refund both reduce outstanding
+        if data.kind == "payment" and data.amount > outstanding + 0.001:
+            raise HTTPException(status_code=400, detail=f"Payment (₹{data.amount:.0f}) cannot exceed the outstanding balance (₹{outstanding:.0f}). Use a credit/refund to record an over-payment.")
+        new_out = round(outstanding - data.amount, 2)
+
+    category = {"spend": "expense", "payment": "payment", "refund": "refund"}[data.kind]
     txn = {
         "id": new_id(),
         "card_id": card_id,
@@ -749,7 +829,7 @@ async def add_card_txn(card_id: str, data: CreditCardTxnInput, user: dict = Depe
         "amount": round(data.amount, 2),
         "account_id": data.account_id if data.kind == "payment" else None,
         "description": data.description,
-        "category": "expense" if data.kind == "spend" else "payment",
+        "category": category,
         "date": data.date or now_iso(),
         "outstanding_after": new_out,
         "created_at": now_iso(),
@@ -763,6 +843,60 @@ async def add_card_txn(card_id: str, data: CreditCardTxnInput, user: dict = Depe
     await db.credit_card_txns.insert_one(txn)
     await db.credit_cards.update_one({"id": card_id}, {"$set": {"outstanding": new_out}})
     return clean(await db.credit_cards.find_one({"id": card_id}))
+
+
+@api_router.get("/creditcards/{card_id}/statement")
+async def card_statement(card_id: str, from_date: Optional[str] = None,
+                         to_date: Optional[str] = None, user: dict = Depends(get_current_user)):
+    card = await db.credit_cards.find_one({"id": card_id})
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+    txns = await db.credit_card_txns.find({"card_id": card_id}).sort("created_at", 1).to_list(50000)
+    accs = {a["id"]: a["name"] for a in await db.accounts.find({}).to_list(1000)}
+    running = 0.0
+    opening = None
+    closing = None
+    purchases = charges = payments = refunds = 0.0
+    rows = []
+    for t in txns:
+        prev = running
+        running = round(running + (t["amount"] if t["kind"] == "spend" else -t["amount"]), 2)
+        day = t["date"][:10]
+        if from_date and day < from_date:
+            continue
+        if to_date and day > to_date:
+            continue
+        if opening is None:
+            opening = round(prev, 2)
+        closing = running
+        if t["kind"] == "spend":
+            charges += t["amount"]
+            if t.get("category") == "purchase":
+                purchases += t["amount"]
+        elif t["kind"] == "payment":
+            payments += t["amount"]
+        elif t["kind"] == "refund":
+            refunds += t["amount"]
+        t["running_outstanding"] = running
+        t["account_name"] = accs.get(t.get("account_id"))
+        t.pop("_id", None)
+        rows.append(t)
+    if opening is None:
+        opening = round(running, 2)
+    if closing is None:
+        closing = opening
+    rows.reverse()
+    return {
+        "card": clean(card),
+        "opening_balance": opening,
+        "purchases": round(purchases, 2),
+        "charges": round(charges, 2),
+        "payments": round(payments, 2),
+        "refunds": round(refunds, 2),
+        "closing_outstanding": closing,
+        "available": round(card.get("limit", 0) - closing, 2),
+        "transactions": rows,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -825,6 +959,8 @@ async def dashboard_summary(user: dict = Depends(get_current_user)):
     # credit limits
     credit_limit_total = round(sum(c.get("limit", 0) for c in cards), 2)
     available_credit_limit = round(credit_limit_total - cc_outstanding, 2)
+    credit_utilization = round((cc_outstanding / credit_limit_total * 100), 1) if credit_limit_total > 0 else 0.0
+    upcoming_due_amount = round(sum((c.get("min_due", 0) or 0) for c in cards if c.get("outstanding", 0) > 0), 2)
 
     # sales / profit / expenses
     sales = await db.sales.find({}).to_list(20000)
@@ -833,10 +969,11 @@ async def dashboard_summary(user: dict = Depends(get_current_user)):
     wholesale_profit = round(sum(s.get("profit", 0) for s in supplies), 2)
     wholesale_sales_total = round(sum(s["amount"] for s in supplies), 2)
     # A generic (non-inventory) credit-card spend raises Card Outstanding (a Source)
-    # with no matching asset, so it is a business expense that must reduce Profit to
-    # keep the accounting equation Assets = Sources balanced.
+    # with no matching asset, so it is a business expense that reduces Profit — keeping
+    # Assets = Sources. A refund reverses such an expense, so it restores Profit.
     expense_txns = await db.credit_card_txns.find({"kind": "spend", "category": "expense"}).to_list(20000)
-    total_expenses = round(sum(t["amount"] for t in expense_txns), 2)
+    refund_txns = await db.credit_card_txns.find({"kind": "refund"}).to_list(20000)
+    total_expenses = round(sum(t["amount"] for t in expense_txns) - sum(t["amount"] for t in refund_txns), 2)
     total_profit = round(retail_profit + wholesale_profit - total_expenses, 2)
 
     return {
@@ -852,6 +989,8 @@ async def dashboard_summary(user: dict = Depends(get_current_user)):
         "credit_card_outstanding": cc_outstanding,
         "credit_limit_total": credit_limit_total,
         "available_credit_limit": available_credit_limit,
+        "credit_utilization": credit_utilization,
+        "upcoming_due_amount": upcoming_due_amount,
         "fixed_poonji": fixed_poonji,
         "stock_value": stock_value,
         "stock_count": len(in_stock),
