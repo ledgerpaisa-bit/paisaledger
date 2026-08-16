@@ -1,0 +1,35 @@
+{
+  "summary": "Iteration-5 validates 4 new CC enhancements + regression. Backend: /app/backend/tests/test_iteration5_features.py — 8/8 PASS. Covered: (a) reverse generic spend restores outstanding & profit, gap invariant; (b) reverse payment restores card outstanding AND credits account back (verified acc 5000->10000, card 3000->8000), gap invariant; (c) reverse refund restores outstanding, gap invariant; (d) reverse of stock-purchase-linked charge returns HTTP 400 with clear message; (e) full-payoff pay-bill zeros card, debits account by full amount, profit unchanged, gap invariant; (f) due_reminders array contains overdue + within-7-day cards ONLY (far-future and zero-outstanding excluded), each row has {card_id,name,due_date,min_due,outstanding,overdue,days_left}; (g) regression: purchase on card raises outstanding by amount, retail sale credits account full sale_price, gap invariant throughout. Notably the previously flagged accounting drifts from iter-4 are now RESOLVED — refund is netted against expenses in dashboard (total_expenses = expense-spend − refunds), and opening_outstanding is tagged category='expense' so it flows through profit. Gap invariance held across every operation. Frontend (Playwright, qatester login): due-reminders-alert banner rendered on Dashboard showing 'OVERDUE (13 Aug 2026) · min ₹500 · outstanding ₹5,000' and 'due in 3d · min ₹300 · outstanding ₹3,000'; all 5 credit strip testids present (₹53k out / ₹797k avail / ₹850k limit / 6.2% util / ₹1k upcoming); Pay Bill modal opens, selecting card with outstanding + clicking pay-full-btn auto-fills amount input to exactly card outstanding (15000); Statement panel renders with Opening/Purchases/Charges/Payments/Refunds/Closing; export-pdf-btn triggers a REAL .pdf download (QATEST_b79292_Reg-statement.pdf via jsPDF, not window.print), export-csv-btn triggers .csv download; on a stock-only card the ledger row shows 'stock' label (not a reverse button) — matches backend 400 blocking rule; no page errors during PDF/CSV export.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Credit Card Ledger date filters + all modals with date pickers", "issues": ["Still uses browser native HTML5 date picker (mm/dd/yyyy input) instead of shadcn Calendar/DatePicker — carried over from prior iterations."]},
+      {"screen": "Pay Bill modal (any modal with dynamic <option> labels)", "issues": ["React hydration warning '<span> cannot be a child of <option>' still logged on every modal open — caused by visual-editor wrapping dynamic option text in a <span>. Non-blocking but noisy in console."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration5_features.py",
+    "/app/test_reports/pytest/iter5.xml"
+  ],
+  "action_items": [
+    "(Optional / carried over) Replace native date inputs with shadcn Calendar/DatePicker across all modals and ledger filters.",
+    "(Optional / carried over) Suppress the <span>-inside-<option> hydration warning by not wrapping dynamic option text with the visual-editor <span> when rendered inside <option>.",
+    "(Optional) Add DELETE /api/creditcards/{id} soft-delete for QA cleanup (leftover QATEST cards keep piling up)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 1112 lines — still needs splitting into routers (auth/accounts/cards/stock/wholesale/dashboard).",
+    "reverse_card_txn does not re-check available limit invariants beyond the amount arithmetic — acceptable, but consider transaction/atomicity around the two writes (delete txn + update card outstanding). If either fails independently the ledger drifts.",
+    "dashboard_summary now iterates every collection on each call — cache or aggregate in Mongo as data grows.",
+    "No route-level ErrorBoundary in React (carried over)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration5_features.py"],
+  "success_rate": {"backend": "100% (8/8)", "frontend": "100% (all 4 new features + regression testids interactive and correct)"},
+  "test_credentials": "qatester@example.com / Test@12345",
+  "seed_data_creation": "Per run: QATEST_<uuid>_RBank / _PB / _PayoffBank / _RegBank (bank accounts opening 0, adjusted upward), plus 8 cards: _Rev, _PayRev, _RefRev, _StockCard, _Payoff, _Overdue (past due), _Soon (in 3d), _Far (in 30d), _Zero (0 outstanding), _Reg. One stock item purchased on _StockCard 15000 and one on _Reg 10000 (later sold retail 12000).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 4 iteration-5 features (reverse txn, full-payoff, due reminders, jsPDF+CSV) are green backend+frontend. Prior iter-4 accounting drifts (opening_outstanding, refund) are now fixed via category='expense' on opening + refund netted into total_expenses. Always use DELTAS and gap-invariance. QA login qatester@example.com/Test@12345. Regression tests: `python -m pytest backend/tests/test_iteration5_features.py backend/tests/test_credit_card_module.py -v -o addopts=`. No DELETE /api/creditcards endpoint exists — QATEST cards accumulate; cleanup requires direct Mongo access if desired.",
+  "rca of the issue": "No bugs found in iteration-5 scope. Reverse-payment correctly rolls back the linked account transaction using reference_id lookup; stock-purchase charges are blocked with a clear 400; due_reminders filters by outstanding>0 AND days_left<=7 (including negative days for overdue); jsPDF is wired via export-pdf-btn and produces a real .pdf download."
+}

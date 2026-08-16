@@ -203,6 +203,11 @@ export default function CreditCards() {
             </Select>
           </Field>
           <Field label="Amount (full or partial)"><Input type="number" step="0.01" value={pay.amount} onChange={(e) => setPay({ ...pay, amount: e.target.value })} required className="font-mono" /></Field>
+          {pay.card_id && (() => { const sel = cards.find((x) => x.id === pay.card_id); return (
+            <button type="button" data-testid="pay-full-btn" onClick={() => setPay({ ...pay, amount: sel ? sel.outstanding : "" })} className="text-xs text-blue-600 hover:underline">
+              Pay full outstanding ({formatINR(sel ? sel.outstanding : 0)})
+            </button>
+          ); })()}
           <Field label="Date"><Input type="date" value={pay.date} onChange={(e) => setPay({ ...pay, date: e.target.value })} /></Field>
           <div className="flex justify-end gap-2 pt-2"><Button type="button" variant="outline" onClick={() => setPayOpen(false)}>Cancel</Button><Button type="submit" data-testid="pay-bill-submit">Pay Bill</Button></div>
         </form>

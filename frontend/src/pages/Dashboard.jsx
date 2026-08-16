@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "@/lib/api";
-import { formatINR } from "@/lib/format";
+import { formatINR, formatDate } from "@/lib/format";
 import { Card } from "@/components/shared";
 import { accountTypeLabel } from "@/components/shared";
 import { TID } from "@/constants/testIds/app";
 import {
   Package, Wallet, CreditCard, PiggyBank, TrendingUp, ChevronRight,
-  Banknote, Smartphone, Truck, ShoppingCart, Landmark, Coins, Plus, Boxes,
+  Banknote, Smartphone, Truck, ShoppingCart, Landmark, Coins, Plus, Boxes, Bell,
 } from "lucide-react";
 
 const TONES = {
@@ -91,6 +91,22 @@ export default function Dashboard() {
         <h1 className="font-display font-black text-2xl sm:text-3xl text-slate-900 tracking-tight">Dashboard</h1>
         <p className="text-sm text-slate-500 mt-1">Your complete business position at a glance.</p>
       </div>
+
+      {data.due_reminders && data.due_reminders.length > 0 && (
+        <div data-testid="due-reminders-alert" className="bg-amber-50 border border-amber-200 rounded-md p-4">
+          <div className="flex items-center gap-2 text-amber-800 font-semibold text-sm mb-2"><Bell size={16} /> Credit Card Dues</div>
+          <div className="space-y-1">
+            {data.due_reminders.map((r) => (
+              <div key={r.card_id} className="text-sm text-amber-900 flex flex-wrap gap-x-2">
+                <span className="font-semibold">{r.name}</span>
+                <span className={r.overdue ? "text-rose-600 font-semibold" : ""}>{r.overdue ? "OVERDUE" : `due in ${r.days_left}d`} ({formatDate(r.due_date)})</span>
+                <span>· min {formatINR(r.min_due)}</span>
+                <span>· outstanding {formatINR(r.outstanding)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* CORE BUSINESS POSITION */}
       <div className="bg-slate-900 rounded-md p-5 lg:p-6 stagger-in">

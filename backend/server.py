@@ -845,6 +845,35 @@ async def add_card_txn(card_id: str, data: CreditCardTxnInput, user: dict = Depe
     return clean(await db.credit_cards.find_one({"id": card_id}))
 
 
+@api_router.delete("/creditcards/{card_id}/transactions/{txn_id}")
+async def reverse_card_txn(card_id: str, txn_id: str, user: dict = Depends(get_current_user)):
+    card = await db.credit_cards.find_one({"id": card_id})
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+    txn = await db.credit_card_txns.find_one({"id": txn_id, "card_id": card_id})
+    if not txn:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    if txn.get("category") == "purchase":
+        raise HTTPException(status_code=400, detail="This charge is linked to a stock purchase. Reverse it from the Purchases/Stock page.")
+    amt = txn["amount"]
+    if txn["kind"] == "spend":
+        new_out = round(card["outstanding"] - amt, 2)
+    else:  # payment or refund reduced outstanding, so reversing adds it back
+        new_out = round(card["outstanding"] + amt, 2)
+    # reverse any linked account movement (credit-card bill payment)
+    if txn["kind"] == "payment":
+        acc_txns = await db.transactions.find({"reference_id": txn_id}).to_list(100)
+        for at in acc_txns:
+            acc = await db.accounts.find_one({"id": at["account_id"]})
+            if acc:
+                delta = at["amount"] if at["direction"] == "debit" else -at["amount"]
+                await db.accounts.update_one({"id": acc["id"]}, {"$set": {"current_balance": round(acc["current_balance"] + delta, 2)}})
+            await db.transactions.delete_one({"id": at["id"]})
+    await db.credit_card_txns.delete_one({"id": txn_id})
+    await db.credit_cards.update_one({"id": card_id}, {"$set": {"outstanding": new_out}})
+    return {"success": True, "outstanding": new_out}
+
+
 @api_router.get("/creditcards/{card_id}/statement")
 async def card_statement(card_id: str, from_date: Optional[str] = None,
                          to_date: Optional[str] = None, user: dict = Depends(get_current_user)):
@@ -961,6 +990,22 @@ async def dashboard_summary(user: dict = Depends(get_current_user)):
     available_credit_limit = round(credit_limit_total - cc_outstanding, 2)
     credit_utilization = round((cc_outstanding / credit_limit_total * 100), 1) if credit_limit_total > 0 else 0.0
     upcoming_due_amount = round(sum((c.get("min_due", 0) or 0) for c in cards if c.get("outstanding", 0) > 0), 2)
+    today_date = datetime.now(timezone.utc).date()
+    due_reminders = []
+    for c in cards:
+        dd = c.get("due_date")
+        if c.get("outstanding", 0) > 0 and dd:
+            try:
+                d = datetime.strptime(dd[:10], "%Y-%m-%d").date()
+            except Exception:
+                continue
+            days_left = (d - today_date).days
+            if days_left <= 7:
+                due_reminders.append({
+                    "card_id": c["id"], "name": c["name"], "due_date": dd,
+                    "min_due": c.get("min_due", 0), "outstanding": c.get("outstanding", 0),
+                    "overdue": days_left < 0, "days_left": days_left,
+                })
 
     # sales / profit / expenses
     sales = await db.sales.find({}).to_list(20000)
@@ -991,6 +1036,7 @@ async def dashboard_summary(user: dict = Depends(get_current_user)):
         "available_credit_limit": available_credit_limit,
         "credit_utilization": credit_utilization,
         "upcoming_due_amount": upcoming_due_amount,
+        "due_reminders": due_reminders,
         "fixed_poonji": fixed_poonji,
         "stock_value": stock_value,
         "stock_count": len(in_stock),

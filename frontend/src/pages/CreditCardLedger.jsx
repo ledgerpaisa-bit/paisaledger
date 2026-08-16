@@ -1,9 +1,12 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import api from "@/lib/api";
+import { toast } from "sonner";
+import { jsPDF } from "jspdf";
+import autoTable from "jspdf-autotable";
+import api, { apiError } from "@/lib/api";
 import { formatINR, formatDateTime, formatDate } from "@/lib/format";
 import { PageHeader, Card, Badge, EmptyState, Field, Select, Input, Button } from "@/components/shared";
-import { ArrowLeft, FileDown, FileText } from "lucide-react";
+import { ArrowLeft, FileDown, FileText, RotateCcw } from "lucide-react";
 
 const KIND_LABELS = { spend: "Spend / Purchase", payment: "Payment", refund: "Credit / Refund" };
 const KIND_TONE = { spend: "red", payment: "green", refund: "violet" };
@@ -43,12 +46,32 @@ export default function CreditCardLedger() {
   };
 
   const exportPDF = () => {
-    if (!stmt) { openStatement(); }
-    const s = stmt;
-    const w = window.open("", "_blank");
-    const rows = (s ? s.transactions : txns).map((t) => `<tr><td>${formatDate(t.date)}</td><td>${KIND_LABELS[t.kind] || t.kind}</td><td>${t.description || ""}</td><td style="text-align:right">${t.kind === "spend" ? formatINR(t.amount) : ""}</td><td style="text-align:right">${t.kind !== "spend" ? formatINR(t.amount) : ""}</td><td style="text-align:right">${formatINR(t.running_outstanding)}</td></tr>`).join("");
-    w.document.write(`<html><head><title>${card.name} Statement</title><style>body{font-family:sans-serif;padding:24px;color:#0f172a}h1{margin:0}table{width:100%;border-collapse:collapse;margin-top:16px;font-size:13px}th,td{border-bottom:1px solid #e2e8f0;padding:6px 8px;text-align:left}.sum{margin-top:12px;font-size:14px}</style></head><body><h1>${card.name}</h1><div>${card.bank_name || ""} ${card.last4 ? "····" + card.last4 : ""}</div>${s ? `<div class="sum">Opening: ${formatINR(s.opening_balance)} · Purchases/Charges: ${formatINR(s.charges)} · Payments: ${formatINR(s.payments)} · Refunds: ${formatINR(s.refunds)} · Closing: ${formatINR(s.closing_outstanding)} · Available: ${formatINR(s.available)}</div>` : ""}<table><thead><tr><th>Date</th><th>Type</th><th>Description</th><th style="text-align:right">Charge</th><th style="text-align:right">Payment</th><th style="text-align:right">Outstanding</th></tr></thead><tbody>${rows}</tbody></table></body></html>`);
-    w.document.close(); w.focus(); w.print();
+    const doc = new jsPDF();
+    doc.setFontSize(16); doc.text(String(card.name), 14, 18);
+    doc.setFontSize(10); doc.setTextColor(100);
+    doc.text(`${card.bank_name || ""} ${card.last4 ? "····" + card.last4 : ""}`.trim(), 14, 24);
+    let startY = 32;
+    if (stmt) {
+      doc.setFontSize(9);
+      doc.text(`Opening ${formatINR(stmt.opening_balance)}  |  Charges ${formatINR(stmt.charges)}  |  Payments ${formatINR(stmt.payments)}  |  Refunds ${formatINR(stmt.refunds)}`, 14, 30);
+      doc.text(`Closing ${formatINR(stmt.closing_outstanding)}  |  Available ${formatINR(stmt.available)}`, 14, 35);
+      startY = 41;
+    }
+    const src = stmt ? stmt.transactions : txns;
+    const rows = src.map((t) => [formatDate(t.date), KIND_LABELS[t.kind] || t.kind, t.description || "",
+      t.kind === "spend" ? formatINR(t.amount) : "", t.kind !== "spend" ? formatINR(t.amount) : "", formatINR(t.running_outstanding)]);
+    autoTable(doc, { head: [["Date", "Type", "Description", "Charge", "Payment", "Outstanding"]], body: rows, startY, styles: { fontSize: 8 }, headStyles: { fillColor: [15, 23, 42] } });
+    doc.save(`${card.name}-statement.pdf`);
+  };
+
+  const reverse = async (t) => {
+    if (t.category === "purchase") { toast.error("This charge is linked to a stock purchase — reverse it from Purchases/Stock."); return; }
+    if (!window.confirm(`Reverse this ${KIND_LABELS[t.kind] || t.kind} of ${formatINR(t.amount)}? This undoes its effect on balances.`)) return;
+    try {
+      await api.delete(`/creditcards/${id}/transactions/${t.id}`);
+      toast.success("Transaction reversed");
+      load(); if (stmt) openStatement();
+    } catch (err) { toast.error(apiError(err)); }
   };
 
   if (!card) return <div className="text-slate-400">Loading…</div>;
@@ -98,7 +121,7 @@ export default function CreditCardLedger() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead><tr className="text-left text-xs uppercase tracking-wide text-slate-500 border-b border-slate-200">
-                <th className="px-4 py-3 font-semibold">Date</th><th className="px-4 py-3 font-semibold">Type</th><th className="px-4 py-3 font-semibold">Description / Reference</th><th className="px-4 py-3 font-semibold text-right">Charge</th><th className="px-4 py-3 font-semibold text-right">Payment</th><th className="px-4 py-3 font-semibold text-right">Outstanding</th></tr></thead>
+                <th className="px-4 py-3 font-semibold">Date</th><th className="px-4 py-3 font-semibold">Type</th><th className="px-4 py-3 font-semibold">Description / Reference</th><th className="px-4 py-3 font-semibold text-right">Charge</th><th className="px-4 py-3 font-semibold text-right">Payment</th><th className="px-4 py-3 font-semibold text-right">Outstanding</th><th className="px-4 py-3"></th></tr></thead>
               <tbody>{txns.map((t) => (
                 <tr key={t.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
                   <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{formatDateTime(t.date)}</td>
@@ -107,6 +130,7 @@ export default function CreditCardLedger() {
                   <td className="px-4 py-3 text-right font-mono text-rose-600">{t.kind === "spend" ? formatINR(t.amount) : "—"}</td>
                   <td className="px-4 py-3 text-right font-mono text-emerald-600">{t.kind !== "spend" ? formatINR(t.amount) : "—"}</td>
                   <td className="px-4 py-3 text-right font-mono font-semibold text-slate-900">{formatINR(t.running_outstanding)}</td>
+                  <td className="px-4 py-3 text-right">{t.category !== "purchase" ? <button onClick={() => reverse(t)} data-testid={`reverse-txn-${t.id}`} className="p-1.5 rounded hover:bg-rose-50 text-rose-500" title="Reverse transaction"><RotateCcw size={15} /></button> : <span className="text-[10px] text-slate-300">stock</span>}</td>
                 </tr>
               ))}</tbody>
             </table>
