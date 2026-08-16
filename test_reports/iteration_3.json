@@ -1,0 +1,23 @@
+{
+  "summary": "Iteration-3 validates the accounting-bug fix for Mobile Business Balance & Profit Tracker. Backend: authored /app/backend/tests/test_accounting_bug.py (9 tests, ALL PASS) using deltas vs baseline dashboard summary, plus explicit Assets == Sources equation check after every step. Flow validated end-to-end with qatester@example.com/Test@12345: (1) baseline balanced; (2) create QATEST_Bank (opening 0) + QATEST_Card (limit 100000) — equation still balanced; (3) POST /api/stock with payment_method=credit_card, purchase_price=10000 -> stock_value +10000, card outstanding +10000, paisa unchanged, profit unchanged, bank unchanged, A==S; (4) POST /api/retail/sales sale_price=12000 cost_price=10000 into QATEST_Bank linked to stock_item_id -> bank balance = 12000 (FULL amount, core bug), paisa +12000, profit +2000, stock returns to baseline, card outstanding still 10000, A==S; (5) POST /api/creditcards/{id}/transactions kind=payment amount=10000 from QATEST_Bank -> bank 12000->2000, card outstanding 10000->0, available limit back to 100000, profit unchanged, paisa -10000, A==S; (6) generic card spend kind=spend amount=5000 -> total_profit decreases by 5000, dashboard.total_expenses +5000, card outstanding +5000, A==S (this is the equation-integrity fix); (7) card ledger shows the payment; (8) account ledger shows the CC payment debit. Frontend: Playwright drove the Dashboard Quick Action qa-pay-card-bill -> navigates to /credit-cards and opens pay-bill-modal; selected pay-bill-card-select + pay-bill-account-select, filled amount 3000, clicked pay-bill-submit -> API confirmed card_outstanding=0 and bank_balance=2000. Also validated header pay-bill-open button opens the same modal and /credit-cards/:id ledger page shows the Payment. No page errors, no runtime exceptions.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": [
+    {"screen": "Pay Credit Card Bill modal (and other modal forms)", "issues": ["Date field still uses native HTML5 date input instead of shadcn Calendar/DatePicker — carried over from iteration-2."]}
+  ]},
+  "test_report_links": ["/app/backend/tests/test_accounting_bug.py"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py now ~927 lines (monolithic) — still recommend splitting into routers.",
+    "GET /api/dashboard/summary now issues an additional collection scan for expense txns; consider indexing credit_card_txns on (kind, category) if data grows.",
+    "The stock-purchase CC txn is tagged category='purchase' inline; if a user later edits/deletes such a txn there is no code path that re-tags — acceptable for now but worth a note.",
+    "No ErrorBoundary at route level (carried over from iteration-2)."
+  ],
+  "updated_files": ["/app/backend/tests/test_accounting_bug.py (new — 9 tests covering the reported accounting bug and equation integrity)"],
+  "success_rate": {"backend": "100% (9/9)", "frontend": "100% (Dashboard QA -> Pay Bill modal, header Pay Bill open, submit updates card+account, card ledger route)"},
+  "test_credentials": "qatester@example.com / Test@12345 (already exists — owner)",
+  "seed_data_creation": "Per test-run: a QATEST_<uuid>_Bank (opening 0), a QATEST_<uuid>_Card (limit 100000), one stock item QATEST_M1 (purchased on card 10000, sold retail 12000), plus a generic card 'fuel' spend 5000. Cleanup runs at end (best-effort deletes of the card and account). Frontend flow also seeds QATESTUI_* card + bank and cleans up after.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Owner is qatester@example.com / Test@12345 (DB retained). Regression test /app/backend/tests/test_accounting_bug.py uses deltas so it works with a populated DB. Run: `python -m pytest backend/tests/test_accounting_bug.py -v -o addopts=`. The /app/backend/tests/backend_test.py file still targets old rahuldrrr@gmail.com user and will fail — either delete it or update the EMAIL/PASSWORD constants.",
+  "rca of the issue": "Root cause (per fix summary): generic credit-card 'spend' txns increased card_outstanding (a Source) with no offsetting asset movement or profit reduction — breaking Assets == Sources. Fix: add_card_txn() now tags kind='spend' with category='expense'; stock-purchase CC txns are tagged category='purchase' by create_stock() so they are NOT counted as expenses. dashboard_summary sums credit_card_txns where kind='spend' AND category='expense' into total_expenses and computes total_profit = retail_profit + wholesale_profit - total_expenses. Verified with 9/9 backend deltas showing A==S after each operation."
+}

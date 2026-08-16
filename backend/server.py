@@ -533,6 +533,7 @@ async def create_stock(data: StockCreate, user: dict = Depends(get_current_user)
         await db.credit_card_txns.insert_one({
             "id": new_id(), "card_id": data.card_id, "kind": "spend",
             "amount": amount, "account_id": None, "description": label,
+            "category": "purchase",
             "date": item["date"], "outstanding_after": new_out, "created_at": now_iso(),
         })
         # Increases this card's outstanding; Cash/Bank/UPI/Paisa unchanged.
@@ -748,6 +749,7 @@ async def add_card_txn(card_id: str, data: CreditCardTxnInput, user: dict = Depe
         "amount": round(data.amount, 2),
         "account_id": data.account_id if data.kind == "payment" else None,
         "description": data.description,
+        "category": "expense" if data.kind == "spend" else "payment",
         "date": data.date or now_iso(),
         "outstanding_after": new_out,
         "created_at": now_iso(),
@@ -824,13 +826,18 @@ async def dashboard_summary(user: dict = Depends(get_current_user)):
     credit_limit_total = round(sum(c.get("limit", 0) for c in cards), 2)
     available_credit_limit = round(credit_limit_total - cc_outstanding, 2)
 
-    # sales / profit
+    # sales / profit / expenses
     sales = await db.sales.find({}).to_list(20000)
     retail_profit = round(sum(s["profit"] for s in sales), 2)
     retail_sales_total = round(sum(s["sale_price"] for s in sales), 2)
     wholesale_profit = round(sum(s.get("profit", 0) for s in supplies), 2)
     wholesale_sales_total = round(sum(s["amount"] for s in supplies), 2)
-    total_profit = round(retail_profit + wholesale_profit, 2)
+    # A generic (non-inventory) credit-card spend raises Card Outstanding (a Source)
+    # with no matching asset, so it is a business expense that must reduce Profit to
+    # keep the accounting equation Assets = Sources balanced.
+    expense_txns = await db.credit_card_txns.find({"kind": "spend", "category": "expense"}).to_list(20000)
+    total_expenses = round(sum(t["amount"] for t in expense_txns), 2)
+    total_profit = round(retail_profit + wholesale_profit - total_expenses, 2)
 
     return {
         "total_paisa": total_paisa,
@@ -854,6 +861,7 @@ async def dashboard_summary(user: dict = Depends(get_current_user)):
         "retail_sales_total": retail_sales_total,
         "wholesale_profit": wholesale_profit,
         "wholesale_sales_total": wholesale_sales_total,
+        "total_expenses": total_expenses,
         "total_profit": total_profit,
         "total_sales": len(sales),
     }
