@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import api, { apiError } from "@/lib/api";
 import { formatINR, formatDate, todayISO } from "@/lib/format";
@@ -8,6 +8,7 @@ import { TID } from "@/constants/testIds/app";
 import { Plus, CreditCard as CardIcon } from "lucide-react";
 
 export default function CreditCards() {
+  const navigate = useNavigate();
   const [cards, setCards] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [txns, setTxns] = useState({});
@@ -53,11 +54,15 @@ export default function CreditCards() {
                   <div className="w-10 h-10 rounded-md bg-slate-900 flex items-center justify-center text-white"><CardIcon size={18} /></div>
                   <div><div className="font-display font-bold text-slate-900">{c.name}</div><div className="text-xs text-slate-400">{c.bank_name || "—"}{c.last4 ? ` · ····${c.last4}` : ""}</div></div>
                 </div>
-                <Button variant="outline" onClick={() => { setTxnCard(c); setTxn({ kind: "spend", amount: "", account_id: "", description: "", date: todayISO() }); }} data-testid={TID.cardTxnBtn(c.id)}>Add Txn</Button>
+                <div className="flex gap-2">
+                  <Button variant="outline" onClick={() => navigate(`/credit-cards/${c.id}`)} data-testid={`card-ledger-${c.id}`}>Ledger</Button>
+                  <Button variant="outline" onClick={() => { setTxnCard(c); setTxn({ kind: "spend", amount: "", account_id: "", description: "", date: todayISO() }); }} data-testid={TID.cardTxnBtn(c.id)}>Add Txn</Button>
+                </div>
               </div>
-              <div className="grid grid-cols-2 gap-4 mt-4">
+              <div className="grid grid-cols-3 gap-4 mt-4">
                 <div><div className="text-xs text-slate-500">Outstanding</div><div className="font-mono font-semibold text-lg text-rose-600">{formatINR(c.outstanding)}</div></div>
                 <div><div className="text-xs text-slate-500">Limit</div><div className="font-mono font-semibold text-lg text-slate-900">{formatINR(c.limit)}</div></div>
+                <div><div className="text-xs text-slate-500">Available</div><div className="font-mono font-semibold text-lg text-teal-600">{formatINR(c.limit - c.outstanding)}</div></div>
               </div>
               <button onClick={() => loadTxns(c.id)} className="text-xs text-blue-600 mt-3 hover:underline">View transactions</button>
               {txns[c.id] && (

@@ -701,6 +701,34 @@ async def card_transactions(card_id: str, user: dict = Depends(get_current_user)
     return txns
 
 
+@api_router.get("/creditcards/{card_id}/ledger")
+async def card_ledger(card_id: str, from_date: Optional[str] = None,
+                      to_date: Optional[str] = None, kind: Optional[str] = None,
+                      user: dict = Depends(get_current_user)):
+    card = await db.credit_cards.find_one({"id": card_id})
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+    all_txns = await db.credit_card_txns.find({"card_id": card_id}).sort("created_at", 1).to_list(10000)
+    accs = {a["id"]: a["name"] for a in await db.accounts.find({}).to_list(1000)}
+    running = 0.0
+    for t in all_txns:
+        running = round(running + (t["amount"] if t["kind"] == "spend" else -t["amount"]), 2)
+        t["running_outstanding"] = running
+        t["account_name"] = accs.get(t.get("account_id"))
+        t.pop("_id", None)
+    filtered = []
+    for t in all_txns:
+        if kind and t["kind"] != kind:
+            continue
+        if from_date and t["date"][:10] < from_date:
+            continue
+        if to_date and t["date"][:10] > to_date:
+            continue
+        filtered.append(t)
+    filtered.reverse()
+    return {"card": clean(card), "transactions": filtered}
+
+
 @api_router.post("/creditcards/{card_id}/transactions")
 async def add_card_txn(card_id: str, data: CreditCardTxnInput, user: dict = Depends(get_current_user)):
     card = await db.credit_cards.find_one({"id": card_id})

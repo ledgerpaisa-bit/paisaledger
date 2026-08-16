@@ -12,6 +12,7 @@ import Retail from "@/pages/Retail";
 import Wholesale from "@/pages/Wholesale";
 import Stock from "@/pages/Stock";
 import CreditCards from "@/pages/CreditCards";
+import CreditCardLedger from "@/pages/CreditCardLedger";
 import Poonji from "@/pages/Poonji";
 import Profit from "@/pages/Profit";
 import Settings from "@/pages/Settings";
@@ -55,6 +56,7 @@ function App() {
               <Route path="customers" element={<Wholesale defaultTab="customers" />} />
               <Route path="payments" element={<Wholesale defaultTab="payments" />} />
               <Route path="credit-cards" element={<CreditCards />} />
+              <Route path="credit-cards/:id" element={<CreditCardLedger />} />
               <Route path="poonji" element={<Poonji />} />
               <Route path="profit" element={<Profit />} />
               <Route path="reports" element={<Profit />} />
