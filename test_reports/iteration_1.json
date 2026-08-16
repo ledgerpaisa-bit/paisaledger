@@ -1,0 +1,29 @@
+{
+  "summary": "Full-stack review of Mobile Business Balance & Profit Tracker. Backend: 13/13 pytest tests pass covering auth (login success/invalid, /me), account creation (Cash 20k + HDFC 50k + SBI 30k + UPI 15k), dashboard totals (total_paisa == sum of active balances), retail sale (HDFC +12000, profit 4000), wholesale supply (does NOT affect paisa; receivable +30000) and payment (SBI +30000, outstanding->0), transfer HDFC->SBI 20000 (paisa unchanged, two ledger entries), negative-balance rejection (400), ledger running-balance correctness, poonji separation from paisa, stock add+sell marks status=sold, credit card spend/payment (SBI debited on payment, paisa reduced), profit report math. Frontend smoke test via Playwright: login with seeded credentials succeeds; Dashboard renders Total Paisa/Cash/Bank/UPI stat cards with Indian rupee formatting (e.g. ₹2,05,000); Accounts page lists rows, Add-Account modal creates UI account; Transfer modal opens; Retail sale-form modal opens; Wholesale/Poonji/Stock/CreditCards/Profit pages load with expected test IDs; Dashboard account breakdown rows are clickable and navigate to the ledger page.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Modal (shared.jsx)", "issue": "Modal does not close on Escape keypress. It only closes on backdrop click or the X button. After a form submit that programmatically opened the modal, tests pressing Escape leave the backdrop up, and the backdrop-blur overlay can intercept sidebar nav clicks until dismissed. Recommend adding a keydown listener for Escape to onClose.", "selector": "components/shared.jsx Modal", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/backend_test.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "(Optional/UX) Add Escape-key handler to Modal component in /app/frontend/src/components/shared.jsx so pressing Esc calls onClose — matches conventional modal UX and prevents lingering backdrops."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 812 lines — consider splitting into routers (accounts, wholesale, retail, creditcards, poonji, dashboard) for maintainability once app grows.",
+    "record_transaction runs read-modify-write on account balance without a transaction/session; concurrent updates could produce a race. For a single-owner app this is fine, but noting for future.",
+    "Account update endpoint drops null-valued fields via 'v is not None' filter — this means you cannot clear notes/bank_name/last4 by sending null. Acceptable but worth noting.",
+    "Login endpoint has no brute-force lockout / rate limiting. Playbook mentions lockout after 5 fails; not implemented here. Not requested in this iteration but flag for security hardening.",
+    "CORS_ORIGINS defaults to '*' with allow_credentials=True — browsers reject this combo. Currently benign because token auth is via Authorization header, but should either restrict origins or set allow_credentials=False."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100%", "frontend": "95%"},
+  "test_credentials": "rahuldrrr@gmail.com / Rahul@2026 (seeded admin, works). Present in /app/memory/test_credentials.md.",
+  "seed_data_creation": "Backend tests create accounts prefixed 'TEST_' plus TEST_ wholesale customer, TEST_ stock and TEST_ credit card. These persist in the DB across runs (unique-name suffixed by uuid) but do NOT interfere with UI tests since names are namespaced.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 13 pytest cases run cleanly with: `cd /app && python -m pytest backend/tests/backend_test.py -v -p xdist -n 0`. The suite loads REACT_APP_BACKEND_URL from /app/frontend/.env. Tests are idempotent — they use unique uuid-suffixed names, so re-running is safe (DB just accumulates TEST_ records). Frontend live URL: https://account-manager-app-12.preview.emergentagent.com. Owner login is prefilled on the login page. Only known frontend nit: Modal has no Escape-to-close handler."
+}

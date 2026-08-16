@@ -1,0 +1,124 @@
+{
+  "theme": "Swiss & High-Contrast (Business Edition)",
+  "typography": {
+    "headings": {
+      "font_family": "Chivo, sans-serif",
+      "weight": "font-black or font-bold",
+      "tracking": "tracking-tight",
+      "scale": "text-2xl sm:text-3xl lg:text-4xl (max text-5xl for Hero numbers)",
+      "color": "text-slate-900"
+    },
+    "body": {
+      "font_family": "IBM Plex Sans, sans-serif",
+      "weight": "font-normal to font-medium",
+      "scale": "text-sm md:text-base",
+      "color": "text-slate-700"
+    },
+    "numbers": {
+      "font_family": "IBM Plex Mono, monospace",
+      "weight": "font-semibold",
+      "note": "Use monospace for all currency and IMEI numbers to align decimal points vertically."
+    }
+  },
+  "colors": {
+    "archetype": "ARCHETYPE 4: SWISS & HIGH-CONTRAST",
+    "backgrounds": {
+      "main": "bg-slate-50",
+      "card": "bg-white",
+      "sidebar_or_header": "bg-slate-900"
+    },
+    "text": {
+      "primary": "text-slate-900",
+      "secondary": "text-slate-500",
+      "inverse": "text-white"
+    },
+    "accents": {
+      "brand_primary": "bg-blue-600 text-white hover:bg-blue-700",
+      "positive": "text-emerald-600 bg-emerald-50 border-emerald-200",
+      "negative": "text-rose-600 bg-rose-50 border-rose-200",
+      "warning": "text-amber-600 bg-amber-50 border-amber-200"
+    },
+    "borders": "border-slate-200"
+  },
+  "visual enhancers": {
+    "borders": "1px solid borders on all cards, no soft shadows. Boxy and crisp.",
+    "corners": "rounded-none or max rounded-md (4px/6px). Never fully rounded.",
+    "textures": "Subtle noise overlay (opacity 0.02) on sidebar to kill digital flatness.",
+    "surfaces": "Grid Borders: expose the skeleton for data-heavy sections. border-collapse on containers."
+  },
+  "component name": {
+    "cards": "Cardless layout preferred, or strict 1px border flat cards.",
+    "inputs": "Shadcn input, focus:ring-blue-600 focus:border-blue-600.",
+    "buttons": "Sharp edges, solid colors, high contrast. Use blue-600 for primary.",
+    "tables": "Shadcn table, border-b border-slate-200 on rows, compact padding.",
+    "dialogs": "Shadcn dialog. Strict overlay background bg-slate-900/40 backdrop-blur-sm.",
+    "toasts": "Sonner (bottom-right positioning, distinct success/error styling)."
+  },
+  "grids": {
+    "dashboard": "High Density Grid (Mode B) - grid-cols-1 md:grid-cols-3 lg:grid-cols-4. gap-4 or gap-6.",
+    "metrics": "col-span-1 for summaries, col-span-2 or 3 for charts/lists.",
+    "rules": "Every pixel utilized. Use h-full on children."
+  },
+  "layouts": {
+    "overall": "Sidebar (Left) + Main Content (Right). Sticky header in main content.",
+    "spacing": "Generous spacing. p-6 or p-8 inside main content sections.",
+    "alignment": "Left-align numbers unless in tables (then right-align currency)."
+  },
+  "motion": {
+    "hover": "Slight background tint change (e.g., hover:bg-slate-100). No bouncing.",
+    "transitions": "transition-colors duration-200 ease-in-out on buttons and links.",
+    "entrance": "Staggered fade-in (opacity + subtle translateY) for dashboard cards."
+  },
+  "accessibility": {
+    "contrast": "APCA & WCAG AA compliant. Minimum 4.5:1 for normal text.",
+    "focus": "Clear focus rings on all interactive elements (focus:ring-2 focus:ring-offset-1).",
+    "testing": "All interactive elements MUST include data-testid.",
+    "transparency": "DO NOT use complete transparent backgrounds for header, overlays, dropdowns."
+  },
+  "media": {
+    "icons": "Phosphor Icons (@phosphor-icons/react) for dense, professional look.",
+    "illustrations": "Keep minimal. Use abstract geometry for login screens."
+  },
+  "3d libraries": {
+    "usage": "Not recommended for this core financial application to preserve performance and clarity."
+  },
+  "image_urls": {
+    "login_background": {
+      "url": "https://images.unsplash.com/photo-1595411425732-e69c1abe2763?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNzl8MHwxfHNlYXJjaHwyfHxhYnN0cmFjdCUyMG1pbmltYWxpc3QlMjBnZW9tZXRyeXxlbnwwfHx8fDE3ODY4NjA5NDR8MA&ixlib=rb-4.1.0&q=85",
+      "description": "White and black striped textile - Use for login page background section to provide a subtle, non-distracting geometric feel.",
+      "category": "backgrounds"
+    },
+    "empty_state_finance": {
+      "url": "https://images.unsplash.com/photo-1762318986860-a7b18dd0da02?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzN8MHwxfHNlYXJjaHwxfHxmaW5hbmNlJTIwYWNjb3VudGluZyUyMHdvcmtzcGFjZXxlbnwwfHx8fDE3ODY4NjA5NDR8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Calculator, glasses, pens - Good for empty states or placeholder image for 'No data yet' in ledger.",
+      "category": "empty_states"
+    }
+  },
+  "GENERAL UI UX DESIGN GUIDELINES": [
+    "Prioritize legibility over aesthetics for numbers (Total Paisa, Balances).",
+    "Keep forms strict and aligned. Ensure IMEI inputs use mono fonts.",
+    "Group related financial actions together (e.g., all Account Transfers in one module).",
+    "Ensure the Indian Rupee symbol (₹) is consistently formatted using Indian comma format (e.g. ₹1,40,000)."
+  ],
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": [
+    "You tend to converge toward generic, 'on distribution' outputs. In frontend design, this creates what users call the 'AI slop' aesthetic. Avoid this.",
+    "Dark colors look good when used independently without gradients. DO NOT use dark colors as gradients.",
+    "Don't make generic centered layouts. Left-align text inputs and forms.",
+    "Create depth through 1px crisp borders, not soft diffuse shadows.",
+    "You MUST NOT apply universal transition (transition: all).",
+    "You MUST NOT center align the app container (.App { text-align: center; }).",
+    "NEVER use AI assistant Emoji characters (🤖🧠) for icons.",
+    "Every interaction needs micro-animations (hover/focus).",
+    "Use Phosphor icons (@phosphor-icons/react) for icons.",
+    "Use sonner for toast notifications."
+  ],
+  "instructions_to_main_agent": [
+    "Build the dashboard focusing on 'Total Paisa' as the central massive metric.",
+    "Account Management UI should feel like a dense ledger: avoid massive empty space in tables.",
+    "Use Shadcn UI components but override border radiuses to be sharper (max 4px).",
+    "Install the following font packages or import from Google Fonts: 'Chivo', 'IBM Plex Sans', 'IBM Plex Mono'.",
+    "Implement Indian Rupee formatting logically in utility functions (Intl.NumberFormat('en-IN')).",
+    "Ensure the Account Master allows easy toggling of 'Active' status.",
+    "For the login page, use a split layout with the form on one side and the 'login_background' image on the other."
+  ]
+}
