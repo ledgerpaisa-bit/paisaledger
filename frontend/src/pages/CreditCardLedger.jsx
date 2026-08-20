@@ -69,7 +69,7 @@ export default function CreditCardLedger() {
     const logo = await loadImage(biz.logo_url);
     if (logo) {
       const h = 16, w = Math.min(40, (logo.w / logo.h) * h);
-      try { doc.addImage(logo.data, "PNG", 14, 10, w, h); x = 14 + w + 4; } catch {}
+      try { doc.addImage(logo.data, "PNG", 14, 10, w, h); x = 14 + w + 4; } catch (e) { console.warn("Statement logo could not be added to PDF:", e); }
     }
     doc.setFontSize(16); doc.setTextColor(15, 23, 42);
     doc.text(String(biz.business_name || card.name), x, topY);
