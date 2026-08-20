@@ -146,12 +146,14 @@ export default function Dashboard() {
       {/* BUSINESS VOLUME */}
       <div>
         <h2 className="text-sm font-semibold text-slate-700 mb-2">Business Volume</h2>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
           <MiniStat label="Total Stock Units" value={data.total_stock_units} isCount tone="slate" testid="vol-stock-units" />
           <MiniStat label="Total Purchase" value={data.total_purchase} tone="blue" testid="vol-total-purchase" />
           <MiniStat label="Retail Sales" value={data.retail_sales_total} tone="emerald" testid="vol-retail-sales" />
           <MiniStat label="Wholesale Sales" value={data.wholesale_sales_total} tone="teal" testid="vol-wholesale-sales" />
+          <MiniStat label="Card Expenses" value={data.total_expenses} tone="rose" testid="vol-card-expenses" />
         </div>
+        <p className="text-xs text-slate-400 mt-2">Card Expenses are non-stock credit-card spends (net of refunds); they reduce Profit directly.</p>
       </div>
 
       {/* LIQUIDITY & LIMITS */}

@@ -38,13 +38,19 @@ profit, and a dashboard with Total Paisa + account-wise balances. Built fresh (n
   pay-bill, opening outstanding, and refund flows (self-verified delta A-S = 0).
 - Iteration 6: soft close/reopen card, statement branding, custom DatePicker (backend 9/9, frontend ~85% w/ 4 UI defects).
 - Iteration 7 (2026-06): DatePicker popover-close-on-select + Escape-only-closes-popover both VERIFIED PASS (5/5). Card submit testid = 'card-form-submit'.
+- 2026-06 (this session): closed-card write guards (card txn + stock POST both 400) verified via curl; dashboard utilization now uses open-card outstanding (never >100%); Card Expenses line added to dashboard; Payment Reminder Emails (Resend) + daily 9am IST cron verified (cron auth 401/401/200/idempotent, real test email delivered to owner).
+
+## Payment Reminder Emails (Resend + cron)
+- Emergent-managed Resend. Env: EMERGENT_EMAIL_KEY, EMAIL_FROM_NAME="Rahul Mobile", WEBHOOK_CRON_SECRET.
+- Recipient = owner (earliest user) email, server-side only (rahuldrrr@gmail.com). Guardrail gate `_assert_safe_email` on every send.
+- Cron: `.emergent/crons.yml` → POST /api/cron/due-reminders daily 09:00 Asia/Kolkata; endpoint auths Bearer WEBHOOK_CRON_SECRET, backgrounds work, idempotent via X-Webhook-Id (db.cron_runs).
+- Emails cards with outstanding>0 and due within 3 days (incl overdue). Owner test-send: POST /api/reminders/test + Settings "Send test reminder" button.
 
 ## Backlog (P1/P2)
-- P1 (flagged in iter 6, pending decision): Backend reject new txns/stock purchases against a CLOSED card (400); Frontend hide/disable "Pay Bill" + "Add Txn" on closed cards.
-- P1: Route-level ErrorBoundary; login rate-limiting; restrict CORS.
 - P2: Split server.py into routers; Mongo aggregation/caching for dashboard & list_cards.
-- P2: Fix `<span>` inside `<option>` hydration console warning; dashboard utilization/available consistency for closed cards; ledger search.
-- Deferred (per user): Payment Reminder Emails; Expenses line on dashboard; Spend-vs-Bill warning.
+- P2: `<span>` inside `<option>` console warning is injected by the dev/visual-editor instrumentation (not in source, not in prod) — no action needed.
+- P2: ledger search.
+- Deferred (per user): Expenses line = DONE; Spend-vs-Bill warning still open.
 
 ## Notes
 - Single-owner app; DB is global (not user-scoped). Testing uses a temp QA user + delta checks.

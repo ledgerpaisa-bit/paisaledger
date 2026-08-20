@@ -16,6 +16,15 @@ import logging
 import uuid
 import bcrypt
 import jwt
+import re
+import hmac
+import asyncio
+import ipaddress
+import httpx
+from html import escape
+from html.parser import HTMLParser
+from urllib.parse import urlparse
+from fastapi import Header
 
 # ---------------------------------------------------------------------------
 # DB
@@ -1006,10 +1015,13 @@ async def dashboard_summary(user: dict = Depends(get_current_user)):
     stock_value = round(sum(i["purchase_price"] for i in in_stock), 2)
     total_purchase = round(sum(i["purchase_price"] for i in all_stock), 2)
 
-    # credit limits
+    # credit limits (limit/available/utilization reflect OPEN cards only, since a
+    # closed card's limit is no longer usable; utilization uses open-card outstanding
+    # so it stays internally consistent with available and never exceeds sensible bounds)
+    open_card_outstanding = round(sum(c.get("outstanding", 0) for c in open_cards), 2)
     credit_limit_total = round(sum(c.get("limit", 0) for c in open_cards), 2)
     available_credit_limit = round(sum((c.get("limit", 0) - c.get("outstanding", 0)) for c in open_cards), 2)
-    credit_utilization = round((cc_outstanding / credit_limit_total * 100), 1) if credit_limit_total > 0 else 0.0
+    credit_utilization = round((open_card_outstanding / credit_limit_total * 100), 1) if credit_limit_total > 0 else 0.0
     upcoming_due_amount = round(sum((c.get("min_due", 0) or 0) for c in open_cards if c.get("outstanding", 0) > 0), 2)
     today_date = datetime.now(timezone.utc).date()
     due_reminders = []
@@ -1053,6 +1065,7 @@ async def dashboard_summary(user: dict = Depends(get_current_user)):
         "cash_accounts": [a for a in accounts if a["type"] == "cash"],
         "wholesale_receivable": receivable,
         "credit_card_outstanding": cc_outstanding,
+        "open_card_outstanding": open_card_outstanding,
         "credit_limit_total": credit_limit_total,
         "available_credit_limit": available_credit_limit,
         "credit_utilization": credit_utilization,
@@ -1103,6 +1116,233 @@ async def profit_report(from_date: Optional[str] = None, to_date: Optional[str] 
         "total_revenue": round(retail_revenue + wholesale_revenue, 2),
         "sales": sorted(sales, key=lambda x: x["date"], reverse=True)[:100],
     }
+
+
+# ---------------------------------------------------------------------------
+# Payment reminder emails (Emergent-managed Resend) + scheduled cron
+# ---------------------------------------------------------------------------
+EMAIL_BASE_URL = "https://integrations.emergentagent.com"  # constant — survives deployment
+EMAIL_KEY = os.environ["EMERGENT_EMAIL_KEY"]
+EMAIL_FROM_NAME = os.environ["EMAIL_FROM_NAME"]
+EMAIL_REPLY_TO = os.environ.get("EMAIL_REPLY_TO")
+WEBHOOK_CRON_SECRET = os.environ["WEBHOOK_CRON_SECRET"]
+IST = timezone(timedelta(hours=5, minutes=30))
+
+_SHORTENERS = ("bit.ly", "tinyurl.com", "t.co", "is.gd", "cutt.ly", "goo.gl", "rebrand.ly")
+_CRED_ASK = ("reply with your password", "reply with the code", "send your password", "cvv",
+             "send us your password", "enter your password below", "confirm your card number",
+             "your full card number", "seed phrase", "recovery phrase", "verify your card",
+             "social security number", "confirm your bank details")
+_HOSTISH = re.compile(r"\b(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,})", re.I)
+
+
+def _host_ok(host: str) -> bool:
+    if not host or "xn--" in host:
+        return False
+    try:
+        ipaddress.ip_address(host)
+        return False
+    except ValueError:
+        pass
+    return not any(host == s or host.endswith("." + s) for s in _SHORTENERS)
+
+
+def _same_site(shown: str, real: str) -> bool:
+    return shown == real or real.endswith("." + shown) or shown.endswith("." + real)
+
+
+class _EmailScan(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.tags, self.urls, self.anchors = set(), [], []
+        self._href, self._text = None, []
+
+    def handle_starttag(self, tag, attrs):
+        self.tags.add(tag.lower())
+        self.urls += [v for k, v in attrs if k.lower() in ("href", "src") and v]
+        if tag.lower() == "a":
+            self._href = dict((k.lower(), v) for k, v in attrs).get("href")
+            self._text = []
+
+    def handle_data(self, data):
+        if self._href is not None:
+            self._text.append(data)
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "a" and self._href is not None:
+            self.anchors.append((self._href, "".join(self._text)))
+            self._href, self._text = None, []
+
+
+def _assert_safe_email(subject: str, html: str) -> None:
+    scan = _EmailScan(); scan.feed(html)
+    if scan.tags & {"form", "input", "textarea", "select"}:
+        raise ValueError("No forms or input fields in email (G2)")
+    body = f"{subject}\n{html}".lower()
+    for p in _CRED_ASK:
+        if p in body:
+            raise ValueError(f"Email asks the recipient for credentials: {p!r} (G2)")
+    for url in scan.urls:
+        low = url.strip().lower()
+        if low.startswith(("mailto:", "tel:", "cid:", "#")):
+            continue
+        if not low.startswith("https://"):
+            raise ValueError(f"Email links/assets must be absolute https: {url!r} (G3)")
+        host = urlparse(low).hostname or ""
+        if not _host_ok(host) or urlparse(low).username is not None:
+            raise ValueError(f"Shortened, numeric-host or credential-bearing URL: {url!r} (G3)")
+    for href, text in scan.anchors:
+        real = urlparse(href.strip().lower()).hostname or ""
+        if not real:
+            continue
+        for m in _HOSTISH.finditer(text):
+            if not _same_site(m.group(1).lower(), real):
+                raise ValueError(f"Anchor text {m.group(1)!r} != real link host {real!r} (G3)")
+
+
+async def send_email(*, to: str, subject: str, html: str) -> Optional[str]:
+    _assert_safe_email(subject, html)
+    payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
+    if EMAIL_REPLY_TO:
+        payload["contact_email"] = EMAIL_REPLY_TO
+    try:
+        async with httpx.AsyncClient(timeout=30) as http:
+            resp = await http.post(
+                f"{EMAIL_BASE_URL}/api/v1/email/send",
+                headers={"X-Email-Key": EMAIL_KEY},
+                json=payload,
+            )
+        resp.raise_for_status()
+        return resp.json().get("id")
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Email send failed: {e.response.status_code} {e.response.text}")
+        raise HTTPException(status_code=502, detail="Failed to send email")
+    except Exception as e:
+        logger.error(f"Email send error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to send email")
+
+
+async def _owner_email() -> Optional[str]:
+    """Recipient comes from server-side records only (G4): the owner is the first
+    user created via the setup flow."""
+    owner = await db.users.find_one({}, sort=[("created_at", 1)])
+    return owner.get("email") if owner else None
+
+
+async def _due_cards(within_days: int = 3) -> list:
+    """Open cards with an outstanding balance whose due date is within `within_days`
+    (includes already-overdue cards). Uses IST 'today' since reminders fire at 9am IST."""
+    today = datetime.now(IST).date()
+    cards = await db.credit_cards.find({}).to_list(1000)
+    out = []
+    for c in cards:
+        if c.get("closed") or c.get("outstanding", 0) <= 0 or not c.get("due_date"):
+            continue
+        try:
+            d = datetime.strptime(c["due_date"][:10], "%Y-%m-%d").date()
+        except Exception:
+            continue
+        days_left = (d - today).days
+        if days_left <= within_days:
+            out.append({
+                "name": c["name"], "due_date": c["due_date"][:10],
+                "min_due": c.get("min_due", 0), "outstanding": c.get("outstanding", 0),
+                "days_left": days_left, "overdue": days_left < 0,
+            })
+    out.sort(key=lambda x: x["days_left"])
+    return out
+
+
+def _reminder_html(cards: list) -> str:
+    rows = ""
+    for c in cards:
+        when = ("Overdue" if c["overdue"] else ("Due today" if c["days_left"] == 0
+                else f"Due in {c['days_left']} day{'s' if c['days_left'] != 1 else ''}"))
+        color = "#dc2626" if c["overdue"] or c["days_left"] == 0 else "#d97706"
+        rows += (
+            f'<tr>'
+            f'<td style="padding:8px 12px;border-bottom:1px solid #eee">{escape(c["name"])}</td>'
+            f'<td style="padding:8px 12px;border-bottom:1px solid #eee">{escape(c["due_date"])}</td>'
+            f'<td style="padding:8px 12px;border-bottom:1px solid #eee;color:{color};font-weight:bold">{when}</td>'
+            f'<td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:right">Rs {c["min_due"]:,.0f}</td>'
+            f'<td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:right">Rs {c["outstanding"]:,.0f}</td>'
+            f'</tr>'
+        )
+    return (
+        f'<table role="presentation" width="100%" style="max-width:640px"><tr><td '
+        f'style="padding:24px;font-family:Arial,sans-serif;color:#0f172a">'
+        f'<h2 style="margin:0 0 4px">Credit card payment reminder</h2>'
+        f'<p style="color:#475569;margin:0 0 16px">The following card(s) have a payment due soon. '
+        f'Please pay before the due date to avoid late fees and interest.</p>'
+        f'<table width="100%" style="border-collapse:collapse;font-size:14px">'
+        f'<thead><tr style="text-align:left;background:#f1f5f9">'
+        f'<th style="padding:8px 12px">Card</th><th style="padding:8px 12px">Due date</th>'
+        f'<th style="padding:8px 12px">Status</th><th style="padding:8px 12px;text-align:right">Min due</th>'
+        f'<th style="padding:8px 12px;text-align:right">Outstanding</th></tr></thead>'
+        f'<tbody>{rows}</tbody></table>'
+        f'<p style="font-size:12px;color:#94a3b8;margin-top:20px">Sent by {escape(EMAIL_FROM_NAME)}. '
+        f'This is an automated reminder from your own Business Balance &amp; Profit Tracker. '
+        f'We never ask for your password or card details by email.</p>'
+        f'</td></tr></table>'
+    )
+
+
+async def _process_reminders(run_id: str, within_days: int = 3) -> None:
+    if run_id and await db.cron_runs.find_one({"run_id": run_id}):
+        return
+    if run_id:
+        await db.cron_runs.insert_one({"run_id": run_id, "at": now_iso()})
+    to = await _owner_email()
+    cards = await _due_cards(within_days)
+    if not to or not cards:
+        logger.info(f"Reminder run {run_id}: nothing to send (recipient={bool(to)}, due={len(cards)})")
+        return
+    subject = f"Payment reminder: {len(cards)} credit card due" + ("s" if len(cards) != 1 else "")
+    try:
+        await send_email(to=to, subject=subject, html=_reminder_html(cards))
+        logger.info(f"Reminder run {run_id}: emailed {len(cards)} card(s) to {to}")
+    except Exception as e:
+        logger.error(f"Reminder run {run_id} send failed: {e}")
+
+
+@api_router.post("/cron/due-reminders")
+async def cron_due_reminders(authorization: Optional[str] = Header(None),
+                             x_webhook_id: Optional[str] = Header(None)):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    expected = f"Bearer {WEBHOOK_CRON_SECRET}"
+    if not authorization or not hmac.compare_digest(authorization, expected):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    run_id = x_webhook_id or new_id()
+    asyncio.create_task(_process_reminders(run_id, 3))
+    return {"status": "accepted", "run_id": run_id}
+
+
+@api_router.post("/reminders/test")
+async def send_test_reminder(user: dict = Depends(get_current_user)):
+    """Owner-triggered test send so the user can verify deliverability. Recipient and
+    body are built server-side (G4). If no card is due within 3 days, sends a short
+    'no dues' confirmation so the email path can still be verified."""
+    to = await _owner_email()
+    if not to:
+        raise HTTPException(status_code=400, detail="No owner email on record")
+    cards = await _due_cards(3)
+    if cards:
+        subject = f"Payment reminder: {len(cards)} credit card due" + ("s" if len(cards) != 1 else "")
+        html = _reminder_html(cards)
+    else:
+        subject = "No credit card dues in the next 3 days"
+        html = (
+            f'<table role="presentation" width="100%" style="max-width:640px"><tr><td '
+            f'style="padding:24px;font-family:Arial,sans-serif;color:#0f172a">'
+            f'<h2 style="margin:0 0 8px">You are all caught up</h2>'
+            f'<p style="color:#475569">No credit card payments are due within the next 3 days. '
+            f'You will get a reminder here as soon as one comes up.</p>'
+            f'<p style="font-size:12px;color:#94a3b8;margin-top:20px">Sent by {escape(EMAIL_FROM_NAME)}. '
+            f'This is a test of your automated payment reminders. We never ask for your password '
+            f'or card details by email.</p></td></tr></table>'
+        )
+    email_id = await send_email(to=to, subject=subject, html=html)
+    return {"status": "sent", "to": to, "due_cards": len(cards), "email_id": email_id}
 
 
 # ---------------------------------------------------------------------------
