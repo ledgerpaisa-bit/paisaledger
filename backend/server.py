@@ -903,14 +903,10 @@ async def reverse_card_txn(card_id: str, txn_id: str, user: dict = Depends(get_c
     return {"success": True, "outstanding": new_out}
 
 
-@api_router.get("/creditcards/{card_id}/statement")
-async def card_statement(card_id: str, from_date: Optional[str] = None,
-                         to_date: Optional[str] = None, user: dict = Depends(get_current_user)):
-    card = await db.credit_cards.find_one({"id": card_id})
-    if not card:
-        raise HTTPException(status_code=404, detail="Card not found")
-    txns = await db.credit_card_txns.find({"card_id": card_id}).sort("created_at", 1).to_list(50000)
-    accs = {a["id"]: a["name"] for a in await db.accounts.find({}).to_list(1000)}
+def _build_statement(card: dict, txns: list, accs: dict, from_date, to_date) -> dict:
+    """Pure statement builder: accumulates a running outstanding across the card's
+    transactions, applies an optional date window, and totals purchases/charges/
+    payments/refunds. Returns the statement payload with rows newest-first."""
     running = 0.0
     opening = None
     closing = None
@@ -957,6 +953,17 @@ async def card_statement(card_id: str, from_date: Optional[str] = None,
     }
 
 
+@api_router.get("/creditcards/{card_id}/statement")
+async def card_statement(card_id: str, from_date: Optional[str] = None,
+                         to_date: Optional[str] = None, user: dict = Depends(get_current_user)):
+    card = await db.credit_cards.find_one({"id": card_id})
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+    txns = await db.credit_card_txns.find({"card_id": card_id}).sort("created_at", 1).to_list(50000)
+    accs = {a["id"]: a["name"] for a in await db.accounts.find({}).to_list(1000)}
+    return _build_statement(card, txns, accs, from_date, to_date)
+
+
 # ---------------------------------------------------------------------------
 # Fixed Poonji (capital)  -- kept SEPARATE from Paisa
 # ---------------------------------------------------------------------------
@@ -985,46 +992,27 @@ async def delete_poonji(entry_id: str, user: dict = Depends(get_current_user)):
 # ---------------------------------------------------------------------------
 # Dashboard & Profit
 # ---------------------------------------------------------------------------
-@api_router.get("/dashboard/summary")
-async def dashboard_summary(user: dict = Depends(get_current_user)):
-    accounts = await db.accounts.find({"active": True}).to_list(1000)
-    for a in accounts:
-        a.pop("_id", None)
-    total_paisa = round(sum(a["current_balance"] for a in accounts), 2)
-    cash_balance = round(sum(a["current_balance"] for a in accounts if a["type"] == "cash"), 2)
-    total_bank = round(sum(a["current_balance"] for a in accounts if a["type"] == "bank"), 2)
-    total_upi = round(sum(a["current_balance"] for a in accounts if a["type"] == "upi"), 2)
-
-    # receivables
-    supplies = await db.wholesale_supplies.find({}).to_list(10000)
-    payments = await db.wholesale_payments.find({}).to_list(10000)
-    receivable = round(sum(s["amount"] for s in supplies) - sum(p["amount"] for p in payments), 2)
-
-    # credit card
-    cards = await db.credit_cards.find({}).to_list(1000)
-    cc_outstanding = round(sum(c["outstanding"] for c in cards), 2)
+def _credit_metrics(cards: list) -> dict:
+    """Pure credit-card aggregates. Limit/available/utilization reflect OPEN cards
+    only (a closed card's limit is no longer usable); utilization uses open-card
+    outstanding so it stays consistent with available and never exceeds sane bounds."""
     open_cards = [c for c in cards if not c.get("closed")]
-
-    # poonji
-    poonji_entries = await db.poonji.find({}).to_list(5000)
-    fixed_poonji = round(sum(e["amount"] for e in poonji_entries), 2)
-
-    # stock
-    all_stock = await db.stock.find({}).to_list(20000)
-    in_stock = [i for i in all_stock if i.get("status") == "in_stock"]
-    stock_value = round(sum(i["purchase_price"] for i in in_stock), 2)
-    total_purchase = round(sum(i["purchase_price"] for i in all_stock), 2)
-
-    # credit limits (limit/available/utilization reflect OPEN cards only, since a
-    # closed card's limit is no longer usable; utilization uses open-card outstanding
-    # so it stays internally consistent with available and never exceeds sensible bounds)
     open_card_outstanding = round(sum(c.get("outstanding", 0) for c in open_cards), 2)
     credit_limit_total = round(sum(c.get("limit", 0) for c in open_cards), 2)
-    available_credit_limit = round(sum((c.get("limit", 0) - c.get("outstanding", 0)) for c in open_cards), 2)
-    credit_utilization = round((open_card_outstanding / credit_limit_total * 100), 1) if credit_limit_total > 0 else 0.0
-    upcoming_due_amount = round(sum((c.get("min_due", 0) or 0) for c in open_cards if c.get("outstanding", 0) > 0), 2)
-    today_date = datetime.now(timezone.utc).date()
-    due_reminders = []
+    return {
+        "open_cards": open_cards,
+        "cc_outstanding": round(sum(c["outstanding"] for c in cards), 2),
+        "open_card_outstanding": open_card_outstanding,
+        "credit_limit_total": credit_limit_total,
+        "available_credit_limit": round(sum((c.get("limit", 0) - c.get("outstanding", 0)) for c in open_cards), 2),
+        "credit_utilization": round((open_card_outstanding / credit_limit_total * 100), 1) if credit_limit_total > 0 else 0.0,
+        "upcoming_due_amount": round(sum((c.get("min_due", 0) or 0) for c in open_cards if c.get("outstanding", 0) > 0), 2),
+    }
+
+
+def _due_reminders(open_cards: list, today_date) -> list:
+    """Cards with an outstanding balance due within the next 7 days (incl. overdue)."""
+    reminders = []
     for c in open_cards:
         dd = c.get("due_date")
         if c.get("outstanding", 0) > 0 and dd:
@@ -1034,54 +1022,88 @@ async def dashboard_summary(user: dict = Depends(get_current_user)):
                 continue
             days_left = (d - today_date).days
             if days_left <= 7:
-                due_reminders.append({
+                reminders.append({
                     "card_id": c["id"], "name": c["name"], "due_date": dd,
                     "min_due": c.get("min_due", 0), "outstanding": c.get("outstanding", 0),
                     "overdue": days_left < 0, "days_left": days_left,
                 })
+    return reminders
 
-    # sales / profit / expenses
-    sales = await db.sales.find({}).to_list(20000)
+
+def _profit_metrics(sales: list, supplies: list, expense_txns: list, refund_txns: list) -> dict:
+    """Retail + wholesale profit and card expenses. A generic (non-inventory) card
+    spend raises Card Outstanding (a Source) with no matching asset, so it is an
+    expense that reduces Profit (keeping Assets = Sources); a refund restores it."""
     retail_profit = round(sum(s["profit"] for s in sales), 2)
-    retail_sales_total = round(sum(s["sale_price"] for s in sales), 2)
     wholesale_profit = round(sum(s.get("profit", 0) for s in supplies), 2)
-    wholesale_sales_total = round(sum(s["amount"] for s in supplies), 2)
-    # A generic (non-inventory) credit-card spend raises Card Outstanding (a Source)
-    # with no matching asset, so it is a business expense that reduces Profit — keeping
-    # Assets = Sources. A refund reverses such an expense, so it restores Profit.
+    total_expenses = round(sum(t["amount"] for t in expense_txns) - sum(t["amount"] for t in refund_txns), 2)
+    return {
+        "retail_profit": retail_profit,
+        "retail_sales_total": round(sum(s["sale_price"] for s in sales), 2),
+        "wholesale_profit": wholesale_profit,
+        "wholesale_sales_total": round(sum(s["amount"] for s in supplies), 2),
+        "total_expenses": total_expenses,
+        "total_profit": round(retail_profit + wholesale_profit - total_expenses, 2),
+    }
+
+
+@api_router.get("/dashboard/summary")
+async def dashboard_summary(user: dict = Depends(get_current_user)):
+    accounts = await db.accounts.find({"active": True}).to_list(1000)
+    for a in accounts:
+        a.pop("_id", None)
+    total_paisa = round(sum(a["current_balance"] for a in accounts), 2)
+
+    supplies = await db.wholesale_supplies.find({}).to_list(10000)
+    payments = await db.wholesale_payments.find({}).to_list(10000)
+    receivable = round(sum(s["amount"] for s in supplies) - sum(p["amount"] for p in payments), 2)
+
+    cards = await db.credit_cards.find({}).to_list(1000)
+    cm = _credit_metrics(cards)
+
+    poonji_entries = await db.poonji.find({}).to_list(5000)
+    fixed_poonji = round(sum(e["amount"] for e in poonji_entries), 2)
+
+    all_stock = await db.stock.find({}).to_list(20000)
+    in_stock = [i for i in all_stock if i.get("status") == "in_stock"]
+    stock_value = round(sum(i["purchase_price"] for i in in_stock), 2)
+    total_purchase = round(sum(i["purchase_price"] for i in all_stock), 2)
+
+    due_reminders = _due_reminders(cm["open_cards"], datetime.now(timezone.utc).date())
+
+    sales = await db.sales.find({}).to_list(20000)
     expense_txns = await db.credit_card_txns.find({"kind": "spend", "category": "expense"}).to_list(20000)
     refund_txns = await db.credit_card_txns.find({"kind": "refund"}).to_list(20000)
-    total_expenses = round(sum(t["amount"] for t in expense_txns) - sum(t["amount"] for t in refund_txns), 2)
-    total_profit = round(retail_profit + wholesale_profit - total_expenses, 2)
+    pm = _profit_metrics(sales, supplies, expense_txns, refund_txns)
 
     return {
         "total_paisa": total_paisa,
-        "cash_balance": cash_balance,
-        "total_bank": total_bank,
-        "total_upi": total_upi,
+        "cash_balance": round(sum(a["current_balance"] for a in accounts if a["type"] == "cash"), 2),
+        "total_bank": round(sum(a["current_balance"] for a in accounts if a["type"] == "bank"), 2),
+        "total_upi": round(sum(a["current_balance"] for a in accounts if a["type"] == "upi"), 2),
         "accounts": accounts,
         "bank_accounts": [a for a in accounts if a["type"] == "bank"],
         "upi_accounts": [a for a in accounts if a["type"] == "upi"],
         "cash_accounts": [a for a in accounts if a["type"] == "cash"],
         "wholesale_receivable": receivable,
-        "credit_card_outstanding": cc_outstanding,
-        "open_card_outstanding": open_card_outstanding,
-        "credit_limit_total": credit_limit_total,
-        "available_credit_limit": available_credit_limit,
-        "credit_utilization": credit_utilization,
-        "upcoming_due_amount": upcoming_due_amount,
+        "credit_card_outstanding": cm["cc_outstanding"],
+        "open_card_outstanding": cm["open_card_outstanding"],
+        "credit_limit_total": cm["credit_limit_total"],
+        "available_credit_limit": cm["available_credit_limit"],
+        "credit_utilization": cm["credit_utilization"],
+        "upcoming_due_amount": cm["upcoming_due_amount"],
         "due_reminders": due_reminders,
         "fixed_poonji": fixed_poonji,
         "stock_value": stock_value,
         "stock_count": len(in_stock),
         "total_stock_units": len(in_stock),
         "total_purchase": total_purchase,
-        "retail_profit": retail_profit,
-        "retail_sales_total": retail_sales_total,
-        "wholesale_profit": wholesale_profit,
-        "wholesale_sales_total": wholesale_sales_total,
-        "total_expenses": total_expenses,
-        "total_profit": total_profit,
+        "retail_profit": pm["retail_profit"],
+        "retail_sales_total": pm["retail_sales_total"],
+        "wholesale_profit": pm["wholesale_profit"],
+        "wholesale_sales_total": pm["wholesale_sales_total"],
+        "total_expenses": pm["total_expenses"],
+        "total_profit": pm["total_profit"],
         "total_sales": len(sales),
     }
 
