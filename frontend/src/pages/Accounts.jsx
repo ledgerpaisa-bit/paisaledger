@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import api, { apiError } from "@/lib/api";
@@ -87,7 +87,7 @@ export default function Accounts() {
     } catch (err) { toast.error(apiError(err)); }
   };
 
-  const activeAccounts = accounts.filter((a) => a.active);
+  const activeAccounts = useMemo(() => accounts.filter((a) => a.active), [accounts]);
 
   return (
     <div>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import api, { apiError } from "@/lib/api";
@@ -36,8 +36,9 @@ export default function Stock() {
 
   const accMap = Object.fromEntries(accounts.map((a) => [a.id, a.name]));
   const cardMap = Object.fromEntries(cards.map((c) => [c.id, c.name]));
-  const typeAccounts = ["cash", "bank", "upi"].includes(form.payment_method)
-    ? accounts.filter((a) => a.type === form.payment_method) : [];
+  const typeAccounts = useMemo(() => (["cash", "bank", "upi"].includes(form.payment_method)
+    ? accounts.filter((a) => a.type === form.payment_method) : []), [accounts, form.payment_method]);
+  const openCards = useMemo(() => cards.filter((c) => !c.closed), [cards]);
 
   const paidVia = (i) => {
     if (i.payment_method === "account") return accMap[i.account_id] || "Account";
@@ -150,7 +151,7 @@ export default function Stock() {
             <Field label="Select Credit Card" hint="Increases this card's outstanding; Paisa unchanged">
               <Select data-testid="stock-card-select" value={form.card_id} onChange={(e) => setForm({ ...form, card_id: e.target.value })} required>
                 <option value="">Select card</option>
-                {cards.filter((c) => !c.closed).map((c) => <option key={c.id} value={c.id}>{c.name} — outstanding {formatINR(c.outstanding)} · avail {formatINR(c.limit - c.outstanding)}</option>)}
+                {openCards.map((c) => <option key={c.id} value={c.id}>{c.name} — outstanding {formatINR(c.outstanding)} · avail {formatINR(c.limit - c.outstanding)}</option>)}
               </Select>
               {cards.length === 0 && <p className="text-xs text-amber-600 mt-1">No credit cards yet. Add one under Credit Cards.</p>}
             </Field>
