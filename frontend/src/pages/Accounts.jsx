@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import api, { apiError } from "@/lib/api";
@@ -25,11 +25,12 @@ export default function Accounts() {
   const [adjust, setAdjust] = useState({ new_balance: "", reason: "" });
   const navigate = useNavigate();
 
-  const load = () => api.get("/accounts").then((r) => setAccounts(r.data)).catch(() => {});
-  useEffect(() => { load(); }, []);
+  const load = useCallback(() => api.get("/accounts").then((r) => setAccounts(r.data)).catch(() => {}), []);
+  useEffect(() => { load(); }, [load]);
   const [searchParams] = useSearchParams();
   useEffect(() => {
     if (searchParams.get("new") === "1") { setEditing(null); setForm(emptyForm); setFormOpen(true); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
   const openNew = () => { setEditing(null); setForm(emptyForm); setFormOpen(true); };

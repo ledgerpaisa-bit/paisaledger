@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import api, { apiError } from "@/lib/api";
@@ -25,13 +25,14 @@ export default function Stock() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(empty);
 
-  const load = () => {
+  const load = useCallback(() => {
     api.get("/stock").then((r) => setItems(r.data)).catch(() => {});
     api.get("/accounts", { params: { active: true } }).then((r) => setAccounts(r.data)).catch(() => {});
     api.get("/creditcards").then((r) => setCards(r.data)).catch(() => {});
-  };
-  useEffect(() => { load(); }, []);
+  }, []);
+  useEffect(() => { load(); }, [load]);
   const [searchParams] = useSearchParams();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (searchParams.get("new") === "1") { setForm(empty); setOpen(true); } }, [searchParams]);
 
   const accMap = Object.fromEntries(accounts.map((a) => [a.id, a.name]));
@@ -46,9 +47,12 @@ export default function Stock() {
     if (i.payment_method === "poonji") return "Fixed Poonji";
     return "—";
   };
-  const paidTone = (i) =>
-    i.payment_method === "credit_card" ? "red" : i.payment_method === "poonji" ? "violet"
-    : i.payment_method === "account" ? "blue" : "slate";
+  const paidTone = (i) => {
+    if (i.payment_method === "credit_card") return "red";
+    if (i.payment_method === "poonji") return "violet";
+    if (i.payment_method === "account") return "blue";
+    return "slate";
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -70,11 +74,10 @@ export default function Stock() {
         date: form.date ? new Date(form.date).toISOString() : null,
         notes: form.notes, ...payment,
       });
-      toast.success(
-        pm === "credit_card" ? "Purchase added — card outstanding increased"
-        : pm === "poonji" ? "Purchase added — funded from Fixed Poonji"
-        : "Purchase added — account debited"
-      );
+      let msg = "Purchase added — account debited";
+      if (pm === "credit_card") msg = "Purchase added — card outstanding increased";
+      else if (pm === "poonji") msg = "Purchase added — funded from Fixed Poonji";
+      toast.success(msg);
       setOpen(false); setForm(empty); load();
     } catch (err) { toast.error(apiError(err)); }
   };

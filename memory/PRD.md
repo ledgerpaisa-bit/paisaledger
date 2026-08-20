@@ -54,3 +54,5 @@ profit, and a dashboard with Total Paisa + account-wise balances. Built fresh (n
 
 ## Notes
 - Single-owner app; DB is global (not user-scoped). Testing uses a temp QA user + delta checks.
+- Code-quality pass (2026-06): applied safe, behavior-preserving fixes only — `useMemo` for derived lists (Accounts/Stock), `useCallback`-stabilized data loaders + eslint-disable on intentional mount effects (Dashboard/CreditCards/Accounts/Stock/Wholesale/AuthContext), extracted nested ternaries into named helpers (Dashboard `utilTone`/`AccountIcon`, CreditCards `utilColorClass`, Stock `paidTone`/toast msg), removed a `console.warn`, and env-ized test passwords. Verified via smoke test (all pages load, auth ok).
+- Declined scanner items (false positives / regression risk): `data-testid` strings mis-flagged as "secrets"; `active is True` is correct for `Optional[bool]`; list-comprehension var `a` is scoped; localStorage→httpOnly cookie rearchitecture; large complexity refactors of tested accounting core (`dashboard_summary`, `record_transaction`, big component splits) — available as a dedicated re-tested pass on request.

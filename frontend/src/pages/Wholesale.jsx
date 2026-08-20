@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import api, { apiError } from "@/lib/api";
@@ -22,13 +22,13 @@ export default function Wholesale({ defaultTab = "customers" }) {
   const [supply, setSupply] = useState({ customer_id: "", description: "", amount: "", cost: "", date: todayISO() });
   const [pay, setPay] = useState({ customer_id: "", amount: "", account_id: "", date: todayISO(), notes: "" });
 
-  const load = () => {
+  const load = useCallback(() => {
     api.get("/wholesale/customers").then((r) => setCustomers(r.data)).catch(() => {});
     api.get("/wholesale/supplies").then((r) => setSupplies(r.data)).catch(() => {});
     api.get("/wholesale/payments").then((r) => setPayments(r.data)).catch(() => {});
     api.get("/accounts", { params: { active: true } }).then((r) => setAccounts(r.data)).catch(() => {});
-  };
-  useEffect(() => { load(); }, []);
+  }, []);
+  useEffect(() => { load(); }, [load]);
   const [searchParams] = useSearchParams();
   useEffect(() => {
     if (searchParams.get("new") === "1") {
@@ -36,6 +36,7 @@ export default function Wholesale({ defaultTab = "customers" }) {
       else if (defaultTab === "supplies") setSupplyOpen(true);
       else setCustOpen(true);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
   const totalOutstanding = customers.reduce((s, c) => s + (c.outstanding || 0), 0);

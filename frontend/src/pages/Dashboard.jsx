@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "@/lib/api";
 import { formatINR, formatDate } from "@/lib/format";
@@ -61,13 +61,26 @@ const Op = ({ children }) => (
   <div className="font-mono font-bold text-xl lg:text-2xl text-slate-500 px-1">{children}</div>
 );
 
+const utilTone = (u) => {
+  if (u > 70) return "rose";
+  if (u > 30) return "amber";
+  return "emerald";
+};
+
+const AccountIcon = ({ type }) => {
+  if (type === "cash") return <Banknote size={16} />;
+  if (type === "bank") return <Landmark size={16} />;
+  return <Smartphone size={16} />;
+};
+
 export default function Dashboard() {
   const [data, setData] = useState(null);
   const navigate = useNavigate();
 
-  useEffect(() => {
+  const load = useCallback(() => {
     api.get("/dashboard/summary").then((r) => setData(r.data)).catch(() => {});
   }, []);
+  useEffect(() => { load(); }, [load]);
 
   if (!data) return <div className="text-slate-400">Loading…</div>;
 
@@ -175,7 +188,7 @@ export default function Dashboard() {
           <MiniStat label="Total Outstanding" value={data.credit_card_outstanding} tone="rose" testid="cc-total-outstanding" />
           <MiniStat label="Total Available Limit" value={data.available_credit_limit} tone="teal" testid="cc-total-available" />
           <MiniStat label="Total Credit Limit" value={data.credit_limit_total} tone="slate" testid="cc-total-limit" />
-          <MiniStat label="Credit Utilization" value={`${data.credit_utilization ?? 0}%`} isCount tone={(data.credit_utilization ?? 0) > 70 ? "rose" : (data.credit_utilization ?? 0) > 30 ? "amber" : "emerald"} testid="cc-utilization" />
+          <MiniStat label="Credit Utilization" value={`${data.credit_utilization ?? 0}%`} isCount tone={utilTone(data.credit_utilization ?? 0)} testid="cc-utilization" />
           <MiniStat label="Upcoming Due" value={data.upcoming_due_amount || 0} tone="amber" testid="cc-upcoming-due" />
         </div>
       </div>
@@ -202,7 +215,7 @@ export default function Dashboard() {
                 >
                   <div className="flex items-center gap-3">
                     <div className="w-8 h-8 rounded-md bg-slate-100 flex items-center justify-center text-slate-500">
-                      {a.type === "cash" ? <Banknote size={16} /> : a.type === "bank" ? <Landmark size={16} /> : <Smartphone size={16} />}
+                      <AccountIcon type={a.type} />
                     </div>
                     <div>
                       <div className="font-medium text-slate-900 text-sm">{a.name}</div>

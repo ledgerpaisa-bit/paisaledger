@@ -20,7 +20,7 @@ BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
 API = f"{BASE_URL}/api"
 
 EMAIL = "owner2@test.com"
-PASSWORD = "Owner@12345"
+PASSWORD = os.getenv("TEST_OWNER_PASSWORD", "Owner@12345")
 
 
 @pytest.fixture(scope="module")

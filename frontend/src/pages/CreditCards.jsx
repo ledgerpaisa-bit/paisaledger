@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import api, { apiError } from "@/lib/api";
@@ -16,8 +16,14 @@ const STATUS = {
 };
 const emptyCard = { name: "", bank_name: "", last4: "", limit: "", opening_outstanding: "", statement_date: "", due_date: "", min_due: "", allow_over_limit: false, notes: "" };
 
+const utilColorClass = (pct) => {
+  if (pct > 70) return "bg-rose-500";
+  if (pct > 30) return "bg-amber-500";
+  return "bg-emerald-500";
+};
+
 function UtilBar({ pct }) {
-  const color = pct > 70 ? "bg-rose-500" : pct > 30 ? "bg-amber-500" : "bg-emerald-500";
+  const color = utilColorClass(pct);
   return (
     <div className="mt-3">
       <div className="flex justify-between text-xs text-slate-500 mb-1"><span>Utilization</span><span className="font-mono">{pct}%</span></div>
@@ -39,15 +45,16 @@ export default function CreditCards() {
   const [pay, setPay] = useState({ card_id: "", account_id: "", amount: "", date: todayISO() });
   const openPay = (cardId) => { setPay({ card_id: cardId || "", account_id: "", amount: "", date: todayISO() }); setPayOpen(true); };
 
-  const load = () => {
+  const load = useCallback(() => {
     api.get("/creditcards").then((r) => setCards(r.data)).catch(() => {});
     api.get("/accounts", { params: { active: true } }).then((r) => setAccounts(r.data)).catch(() => {});
-  };
-  useEffect(() => { load(); }, []);
+  }, []);
+  useEffect(() => { load(); }, [load]);
   const [searchParams] = useSearchParams();
   useEffect(() => {
     if (searchParams.get("new") === "1") { setEditingId(null); setCard(emptyCard); setAddOpen(true); }
     if (searchParams.get("pay") === "1") setPayOpen(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
   const openEdit = (c) => {
