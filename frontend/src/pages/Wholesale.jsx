@@ -36,8 +36,7 @@ export default function Wholesale({ defaultTab = "customers" }) {
       else if (defaultTab === "supplies") setSupplyOpen(true);
       else setCustOpen(true);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
+  }, [searchParams, defaultTab]);
 
   const totalOutstanding = customers.reduce((s, c) => s + (c.outstanding || 0), 0);
 
