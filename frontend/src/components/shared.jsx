@@ -1,6 +1,32 @@
-import { useEffect } from "react";
-import { formatINR } from "@/lib/format";
-import { X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { formatINR, formatDate } from "@/lib/format";
+import { X, Calendar as CalendarIcon } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
+
+const toYMD = (d) => {
+  const x = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+  return x.toISOString().slice(0, 10);
+};
+
+export const DatePicker = ({ value, onChange, testid }) => {
+  const [open, setOpen] = useState(false);
+  const selected = value ? new Date(value + "T00:00:00") : undefined;
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button type="button" data-testid={testid}
+          className="w-full h-10 px-3 rounded-md border border-slate-300 bg-white text-slate-900 text-sm flex items-center gap-2 focus:outline-none focus:ring-2 focus:ring-blue-600 transition-colors">
+          <CalendarIcon size={15} className="text-slate-400" />
+          <span className={value ? "" : "text-slate-400"}>{value ? formatDate(value) : "Pick a date"}</span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto p-0" align="start" onEscapeKeyDown={(e) => e.stopPropagation()}>
+        <Calendar mode="single" selected={selected} onSelect={(d) => { onChange(d ? toYMD(d) : ""); setOpen(false); }} initialFocus />
+      </PopoverContent>
+    </Popover>
+  );
+};
 
 export const PageHeader = ({ title, subtitle, action }) => (
   <div className="flex items-start justify-between gap-4 mb-6">

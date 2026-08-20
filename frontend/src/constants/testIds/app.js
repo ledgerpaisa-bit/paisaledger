@@ -39,6 +39,7 @@ export const TID = {
   stockSubmit: "stock-form-submit",
   // credit card
   addCardBtn: "add-card-button",
+  cardSubmit: "card-form-submit",
   cardTxnBtn: (id) => `card-txn-${id}`,
   // poonji
   addPoonjiBtn: "add-poonji-button",

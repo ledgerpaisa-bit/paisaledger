@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import api, { apiError } from "@/lib/api";
 import { formatINR, formatDate, todayISO } from "@/lib/format";
-import { PageHeader, Card, Button, Field, Input, Textarea, Modal, EmptyState } from "@/components/shared";
+import { PageHeader, Card, Button, Field, Input, Textarea, Modal, EmptyState, DatePicker } from "@/components/shared";
 import { TID } from "@/constants/testIds/app";
 import { Plus, Trash2 } from "lucide-react";
 
@@ -62,7 +62,7 @@ export default function Poonji() {
         <form onSubmit={submit} className="space-y-4">
           <Field label="Amount"><Input type="number" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required className="font-mono" /></Field>
           <Field label="Description"><Input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} required placeholder="e.g. Initial investment" /></Field>
-          <Field label="Date"><Input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></Field>
+          <Field label="Date"><DatePicker testid="poonji-date" value={form.date} onChange={(v) => setForm({ ...form, date: v })} /></Field>
           <div className="flex justify-end gap-2 pt-2"><Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button type="submit" data-testid={TID.poonjiSubmit}>Add</Button></div>
         </form>
       </Modal>

@@ -1,0 +1,28 @@
+{
+  "summary": "Frontend-only re-test of Iteration 6 DatePicker bugs (popover not closing on day select; Escape closing whole modal). Both fixes VERIFIED PASS on desktop 1920x800 with qatester@example.com. Flows tested: Add Credit Card (card-statement-date, card-due-date) open->select->submit; Stock Add Purchase (stock-date) open->select->submit; Escape-in-popover; Escape with no popover (regression); outside-click closes popover only. Persisted dates verified via API for exact-date correctness (no off-by-one).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Optional cleanup: leftover QA data in the shared DB - stock item 'QATEST_DP_Phone3' (Rs.100, 12 Aug 2026, paid via icici) cannot be deleted via API (DELETE /api/stock/{id} returns 400 'Cannot delete a purchase that has a recorded payment' - by design). Credit card 'QATEST_DP_Card' was created and then CLOSED (no hard-delete endpoint exists for cards)."
+  ],
+  "critical_code_review_comments": [
+    "shared.jsx Modal uses a window-level keydown Escape listener while Radix DismissableLayer listens on document; the current fix (stopPropagation in onEscapeKeyDown) works but is order-dependent. A more robust pattern would be to track open-popover state or use Radix Dialog for the Modal.",
+    "Add Credit Card submit button previously had no data-testid; added TID.cardSubmit = 'card-form-submit' (test-only support change)."
+  ],
+  "updated_files": [
+    "/app/frontend/src/constants/testIds/app.js",
+    "/app/frontend/src/pages/CreditCards.jsx"
+  ],
+  "success_rate": {"backend": "not tested", "frontend": "100% (5/5 scenarios)"},
+  "seed_data_creation": "QATEST_DP_Card (credit card, statement_date 2026-08-15, now closed); QATEST_DP_Phone3 (stock, 2026-08-12, Rs.100) - undeletable by design.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": false,
+  "test_credentials": "qatester@example.com / Test@12345",
+  "context_for_next_testing_agent": "DatePicker verified: popover closes on day select, selected date renders in trigger (e.g. '15 Aug 2026'), submit is immediately clickable, Escape inside popover closes only popover (typed form data preserved), second Escape closes modal, outside-click closes popover only. Card submit testid is now 'card-form-submit'. Stock modal: use select_option index=1 for stock-account-select (index 0 is the 'Select account' placeholder) and keep price small (icici balance ~Rs.2000) or backend returns 400 insufficient balance.",
+  "rca_of_the_issue": "Iteration 6 bugs were caused by an uncontrolled Radix Popover (never closed after onSelect) and the Modal's window-level Escape handler receiving the popover's Escape keydown. Fix in shared.jsx (controlled open state + setOpen(false) in onSelect + onEscapeKeyDown stopPropagation) resolves both; verified end-to-end."
+}

@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import api, { apiError } from "@/lib/api";
 import { formatINR, formatDate, todayISO } from "@/lib/format";
-import { PageHeader, Card, Button, Field, Input, Select, Textarea, Modal, Badge, EmptyState } from "@/components/shared";
+import { PageHeader, Card, Button, Field, Input, Select, Textarea, Modal, Badge, EmptyState, DatePicker } from "@/components/shared";
 import { TID } from "@/constants/testIds/app";
 import { Plus } from "lucide-react";
 
@@ -109,7 +109,7 @@ export default function Retail() {
               {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
             </Select>
           </Field>
-          <Field label="Date"><Input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></Field>
+          <Field label="Date"><DatePicker testid="sale-date" value={form.date} onChange={(v) => setForm({ ...form, date: v })} /></Field>
           <Field label="Notes"><Textarea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancel</Button>

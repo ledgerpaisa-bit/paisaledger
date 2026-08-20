@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import api, { apiError } from "@/lib/api";
 import { formatINR, formatDate, todayISO } from "@/lib/format";
-import { PageHeader, Card, Button, Field, Input, Select, Textarea, Modal, Badge, EmptyState } from "@/components/shared";
+import { PageHeader, Card, Button, Field, Input, Select, Textarea, Modal, Badge, EmptyState, DatePicker } from "@/components/shared";
 import { TID } from "@/constants/testIds/app";
 import { Plus, Users, Truck, Banknote } from "lucide-react";
 
@@ -116,7 +116,7 @@ export default function Wholesale({ defaultTab = "customers" }) {
             <Field label="Cost"><Input type="number" step="0.01" value={supply.cost} onChange={(e) => setSupply({ ...supply, cost: e.target.value })} className="font-mono" /></Field>
             <Field label="Supply Amount"><Input type="number" step="0.01" value={supply.amount} onChange={(e) => setSupply({ ...supply, amount: e.target.value })} required className="font-mono" /></Field>
           </div>
-          <Field label="Date"><Input type="date" value={supply.date} onChange={(e) => setSupply({ ...supply, date: e.target.value })} /></Field>
+          <Field label="Date"><DatePicker testid="supply-date" value={supply.date} onChange={(v) => setSupply({ ...supply, date: v })} /></Field>
           <div className="flex justify-end gap-2 pt-2"><Button type="button" variant="outline" onClick={() => setSupplyOpen(false)}>Cancel</Button><Button type="submit">Record</Button></div>
         </form>
       </Modal>
@@ -126,7 +126,7 @@ export default function Wholesale({ defaultTab = "customers" }) {
           <Field label="Customer"><Select value={pay.customer_id} onChange={(e) => setPay({ ...pay, customer_id: e.target.value })} required><option value="">Select</option>{customers.map((c) => <option key={c.id} value={c.id}>{c.name} — outstanding {formatINR(c.outstanding)}</option>)}</Select></Field>
           <Field label="Amount"><Input type="number" step="0.01" value={pay.amount} onChange={(e) => setPay({ ...pay, amount: e.target.value })} required className="font-mono" /></Field>
           <Field label="Received In"><Select value={pay.account_id} onChange={(e) => setPay({ ...pay, account_id: e.target.value })} required><option value="">Select account</option>{accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</Select></Field>
-          <Field label="Date"><Input type="date" value={pay.date} onChange={(e) => setPay({ ...pay, date: e.target.value })} /></Field>
+          <Field label="Date"><DatePicker testid="wpay-date" value={pay.date} onChange={(v) => setPay({ ...pay, date: v })} /></Field>
           <div className="flex justify-end gap-2 pt-2"><Button type="button" variant="outline" onClick={() => setPayOpen(false)}>Cancel</Button><Button type="submit" data-testid={TID.wholesalePaymentSubmit}>Receive</Button></div>
         </form>
       </Modal>

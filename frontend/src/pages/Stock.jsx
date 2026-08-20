@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import api, { apiError } from "@/lib/api";
 import { formatINR, formatDate, todayISO } from "@/lib/format";
-import { PageHeader, Card, Button, Field, Input, Select, Textarea, Modal, Badge, EmptyState } from "@/components/shared";
+import { PageHeader, Card, Button, Field, Input, Select, Textarea, Modal, Badge, EmptyState, DatePicker } from "@/components/shared";
 import { TID } from "@/constants/testIds/app";
 import { Plus, Trash2 } from "lucide-react";
 
@@ -150,7 +150,7 @@ export default function Stock() {
             <Field label="Select Credit Card" hint="Increases this card's outstanding; Paisa unchanged">
               <Select data-testid="stock-card-select" value={form.card_id} onChange={(e) => setForm({ ...form, card_id: e.target.value })} required>
                 <option value="">Select card</option>
-                {cards.map((c) => <option key={c.id} value={c.id}>{c.name} — outstanding {formatINR(c.outstanding)} · avail {formatINR(c.limit - c.outstanding)}</option>)}
+                {cards.filter((c) => !c.closed).map((c) => <option key={c.id} value={c.id}>{c.name} — outstanding {formatINR(c.outstanding)} · avail {formatINR(c.limit - c.outstanding)}</option>)}
               </Select>
               {cards.length === 0 && <p className="text-xs text-amber-600 mt-1">No credit cards yet. Add one under Credit Cards.</p>}
             </Field>
@@ -162,7 +162,7 @@ export default function Stock() {
             </p>
           )}
 
-          <Field label="Date"><Input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></Field>
+          <Field label="Date"><DatePicker testid="stock-date" value={form.date} onChange={(v) => setForm({ ...form, date: v })} /></Field>
           <Field label="Notes"><Textarea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
           <div className="flex justify-end gap-2 pt-2"><Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button type="submit" data-testid={TID.stockSubmit}>Add Purchase</Button></div>
         </form>

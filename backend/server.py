@@ -546,6 +546,8 @@ async def create_stock(data: StockCreate, user: dict = Depends(get_current_user)
         card = await db.credit_cards.find_one({"id": data.card_id})
         if not card:
             raise HTTPException(status_code=404, detail="Credit card not found")
+        if card.get("closed"):
+            raise HTTPException(status_code=400, detail="This card is closed. Reopen it before using it for a purchase.")
         available = round(card.get("limit", 0) - card["outstanding"], 2)
         if not card.get("allow_over_limit", False) and amount > available:
             raise HTTPException(status_code=400, detail=f"Purchase exceeds available credit limit (₹{available:.0f}). Enable over-limit for this card to allow it.")
@@ -691,8 +693,11 @@ async def create_wholesale_payment(data: WholesalePaymentInput, user: dict = Dep
 # Credit Cards
 # ---------------------------------------------------------------------------
 @api_router.get("/creditcards")
-async def list_cards(user: dict = Depends(get_current_user)):
-    cards = await db.credit_cards.find({}).sort("created_at", -1).to_list(1000)
+async def list_cards(active: Optional[bool] = None, user: dict = Depends(get_current_user)):
+    query = {}
+    if active is True:
+        query = {"closed": {"$ne": True}}
+    cards = await db.credit_cards.find(query).sort("created_at", -1).to_list(1000)
     txns = await db.credit_card_txns.find({}).to_list(50000)
     paid_by = {}
     for t in txns:
@@ -702,11 +707,14 @@ async def list_cards(user: dict = Depends(get_current_user)):
     out = []
     for c in cards:
         c.pop("_id", None)
+        c["closed"] = bool(c.get("closed", False))
         o = c.get("outstanding", 0)
         c["available"] = round(c.get("limit", 0) - o, 2)
         paid = paid_by.get(c["id"], 0)
         due = c.get("due_date")
-        if o <= 0.001:
+        if c["closed"]:
+            status = "closed"
+        elif o <= 0.001:
             status = "paid"
         elif due and due < today:
             status = "overdue"
@@ -718,6 +726,16 @@ async def list_cards(user: dict = Depends(get_current_user)):
         c["total_paid"] = round(paid, 2)
         out.append(c)
     return out
+
+
+@api_router.patch("/creditcards/{card_id}/close")
+async def toggle_card_close(card_id: str, user: dict = Depends(get_current_user)):
+    card = await db.credit_cards.find_one({"id": card_id})
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+    new_closed = not bool(card.get("closed", False))
+    await db.credit_cards.update_one({"id": card_id}, {"$set": {"closed": new_closed}})
+    return clean(await db.credit_cards.find_one({"id": card_id}))
 
 
 @api_router.post("/creditcards")
@@ -805,6 +823,8 @@ async def add_card_txn(card_id: str, data: CreditCardTxnInput, user: dict = Depe
     card = await db.credit_cards.find_one({"id": card_id})
     if not card:
         raise HTTPException(status_code=404, detail="Card not found")
+    if card.get("closed"):
+        raise HTTPException(status_code=400, detail="This card is closed. Reopen it before adding transactions.")
     if data.amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be positive")
     if data.kind == "payment" and not data.account_id:
@@ -974,6 +994,7 @@ async def dashboard_summary(user: dict = Depends(get_current_user)):
     # credit card
     cards = await db.credit_cards.find({}).to_list(1000)
     cc_outstanding = round(sum(c["outstanding"] for c in cards), 2)
+    open_cards = [c for c in cards if not c.get("closed")]
 
     # poonji
     poonji_entries = await db.poonji.find({}).to_list(5000)
@@ -986,13 +1007,13 @@ async def dashboard_summary(user: dict = Depends(get_current_user)):
     total_purchase = round(sum(i["purchase_price"] for i in all_stock), 2)
 
     # credit limits
-    credit_limit_total = round(sum(c.get("limit", 0) for c in cards), 2)
-    available_credit_limit = round(credit_limit_total - cc_outstanding, 2)
+    credit_limit_total = round(sum(c.get("limit", 0) for c in open_cards), 2)
+    available_credit_limit = round(sum((c.get("limit", 0) - c.get("outstanding", 0)) for c in open_cards), 2)
     credit_utilization = round((cc_outstanding / credit_limit_total * 100), 1) if credit_limit_total > 0 else 0.0
-    upcoming_due_amount = round(sum((c.get("min_due", 0) or 0) for c in cards if c.get("outstanding", 0) > 0), 2)
+    upcoming_due_amount = round(sum((c.get("min_due", 0) or 0) for c in open_cards if c.get("outstanding", 0) > 0), 2)
     today_date = datetime.now(timezone.utc).date()
     due_reminders = []
-    for c in cards:
+    for c in open_cards:
         dd = c.get("due_date")
         if c.get("outstanding", 0) > 0 and dd:
             try:
@@ -1087,6 +1108,21 @@ async def profit_report(from_date: Optional[str] = None, to_date: Optional[str] 
 # ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
+@api_router.get("/settings")
+async def get_settings(user: dict = Depends(get_current_user)):
+    doc = await db.settings.find_one({"id": "business"})
+    if not doc:
+        return {"id": "business", "business_name": "", "logo_url": ""}
+    return clean(doc)
+
+
+@api_router.put("/settings")
+async def update_settings(payload: dict, user: dict = Depends(get_current_user)):
+    updates = {"business_name": payload.get("business_name", ""), "logo_url": payload.get("logo_url", "")}
+    await db.settings.update_one({"id": "business"}, {"$set": {"id": "business", **updates}}, upsert=True)
+    return clean(await db.settings.find_one({"id": "business"}))
+
+
 @app.on_event("startup")
 async def startup():
     await db.accounts.create_index("id", unique=True)

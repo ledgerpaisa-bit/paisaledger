@@ -36,12 +36,15 @@ profit, and a dashboard with Total Paisa + account-wise balances. Built fresh (n
 ## Verified
 - Testing agent iterations 1–4 all pass (100%). Accounting equation holds through purchase→sale→
   pay-bill, opening outstanding, and refund flows (self-verified delta A-S = 0).
+- Iteration 6: soft close/reopen card, statement branding, custom DatePicker (backend 9/9, frontend ~85% w/ 4 UI defects).
+- Iteration 7 (2026-06): DatePicker popover-close-on-select + Escape-only-closes-popover both VERIFIED PASS (5/5). Card submit testid = 'card-form-submit'.
 
 ## Backlog (P1/P2)
-- P1: DELETE/soft-delete + reverse for cards, purchases, card txns.
+- P1 (flagged in iter 6, pending decision): Backend reject new txns/stock purchases against a CLOSED card (400); Frontend hide/disable "Pay Bill" + "Add Txn" on closed cards.
 - P1: Route-level ErrorBoundary; login rate-limiting; restrict CORS.
 - P2: Split server.py into routers; Mongo aggregation/caching for dashboard & list_cards.
-- P2: shadcn DatePicker instead of native date inputs; due-date reminders; ledger search.
+- P2: Fix `<span>` inside `<option>` hydration console warning; dashboard utilization/available consistency for closed cards; ledger search.
+- Deferred (per user): Payment Reminder Emails; Expenses line on dashboard; Spend-vs-Bill warning.
 
 ## Notes
 - Single-owner app; DB is global (not user-scoped). Testing uses a temp QA user + delta checks.

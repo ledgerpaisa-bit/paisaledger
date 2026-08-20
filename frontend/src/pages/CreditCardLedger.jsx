@@ -18,6 +18,7 @@ export default function CreditCardLedger() {
   const [txns, setTxns] = useState([]);
   const [filters, setFilters] = useState({ from_date: "", to_date: "", kind: "" });
   const [stmt, setStmt] = useState(null);
+  const [biz, setBiz] = useState({ business_name: "", logo_url: "" });
 
   const load = useCallback(() => {
     const params = {};
@@ -27,6 +28,23 @@ export default function CreditCardLedger() {
     api.get(`/creditcards/${id}/ledger`, { params }).then((r) => { setCard(r.data.card); setTxns(r.data.transactions); }).catch(() => {});
   }, [id, filters]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { api.get("/settings").then((r) => setBiz(r.data)).catch(() => {}); }, []);
+
+  const loadImage = (url) => new Promise((resolve) => {
+    if (!url) return resolve(null);
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      try {
+        const cv = document.createElement("canvas");
+        cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+        cv.getContext("2d").drawImage(img, 0, 0);
+        resolve({ data: cv.toDataURL("image/png"), w: img.naturalWidth, h: img.naturalHeight });
+      } catch { resolve(null); }
+    };
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
 
   const openStatement = () => {
     const params = {};
@@ -45,17 +63,24 @@ export default function CreditCardLedger() {
     a.href = URL.createObjectURL(blob); a.download = `${card.name}-statement.csv`; a.click();
   };
 
-  const exportPDF = () => {
+  const exportPDF = async () => {
     const doc = new jsPDF();
-    doc.setFontSize(16); doc.text(String(card.name), 14, 18);
+    let x = 14, topY = 18;
+    const logo = await loadImage(biz.logo_url);
+    if (logo) {
+      const h = 16, w = Math.min(40, (logo.w / logo.h) * h);
+      try { doc.addImage(logo.data, "PNG", 14, 10, w, h); x = 14 + w + 4; } catch {}
+    }
+    doc.setFontSize(16); doc.setTextColor(15, 23, 42);
+    doc.text(String(biz.business_name || card.name), x, topY);
     doc.setFontSize(10); doc.setTextColor(100);
-    doc.text(`${card.bank_name || ""} ${card.last4 ? "····" + card.last4 : ""}`.trim(), 14, 24);
-    let startY = 32;
+    doc.text(`${biz.business_name ? card.name + " · " : ""}${card.bank_name || ""} ${card.last4 ? "····" + card.last4 : ""}`.trim(), x, topY + 6);
+    let startY = 34;
     if (stmt) {
       doc.setFontSize(9);
-      doc.text(`Opening ${formatINR(stmt.opening_balance)}  |  Charges ${formatINR(stmt.charges)}  |  Payments ${formatINR(stmt.payments)}  |  Refunds ${formatINR(stmt.refunds)}`, 14, 30);
-      doc.text(`Closing ${formatINR(stmt.closing_outstanding)}  |  Available ${formatINR(stmt.available)}`, 14, 35);
-      startY = 41;
+      doc.text(`Opening ${formatINR(stmt.opening_balance)}  |  Charges ${formatINR(stmt.charges)}  |  Payments ${formatINR(stmt.payments)}  |  Refunds ${formatINR(stmt.refunds)}`, 14, 32);
+      doc.text(`Closing ${formatINR(stmt.closing_outstanding)}  |  Available ${formatINR(stmt.available)}`, 14, 37);
+      startY = 43;
     }
     const src = stmt ? stmt.transactions : txns;
     const rows = src.map((t) => [formatDate(t.date), KIND_LABELS[t.kind] || t.kind, t.description || "",

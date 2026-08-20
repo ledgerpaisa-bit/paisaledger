@@ -3,15 +3,16 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import api, { apiError } from "@/lib/api";
 import { formatINR, formatDate, todayISO } from "@/lib/format";
-import { PageHeader, Card, Button, Field, Input, Select, Textarea, Modal, Badge, EmptyState } from "@/components/shared";
+import { PageHeader, Card, Button, Field, Input, Select, Textarea, Modal, Badge, EmptyState, DatePicker } from "@/components/shared";
 import { TID } from "@/constants/testIds/app";
-import { Plus, CreditCard as CardIcon, Coins, Pencil } from "lucide-react";
+import { Plus, CreditCard as CardIcon, Coins, Pencil, Archive, ArchiveRestore } from "lucide-react";
 
 const STATUS = {
   paid: { tone: "green", label: "Paid" },
   partially_paid: { tone: "amber", label: "Partially Paid" },
   due: { tone: "blue", label: "Due" },
   overdue: { tone: "red", label: "Overdue" },
+  closed: { tone: "slate", label: "Closed" },
 };
 const emptyCard = { name: "", bank_name: "", last4: "", limit: "", opening_outstanding: "", statement_date: "", due_date: "", min_due: "", allow_over_limit: false, notes: "" };
 
@@ -98,6 +99,13 @@ export default function CreditCards() {
   };
 
   const totalOutstanding = cards.reduce((s, c) => s + c.outstanding, 0);
+  const openCards = cards.filter((c) => !c.closed);
+
+  const toggleClose = async (c) => {
+    if (!c.closed && c.outstanding > 0 && !window.confirm(`${c.name} still has an outstanding of ${formatINR(c.outstanding)}. Close it anyway? Its history stays accessible.`)) return;
+    try { await api.patch(`/creditcards/${c.id}/close`); toast.success(c.closed ? "Card reopened" : "Card closed"); load(); }
+    catch (err) { toast.error(apiError(err)); }
+  };
 
   return (
     <div>
@@ -112,7 +120,7 @@ export default function CreditCards() {
             const pct = c.limit > 0 ? Math.round((c.outstanding / c.limit) * 100) : 0;
             const st = STATUS[c.status] || STATUS.due;
             return (
-              <Card key={c.id} className="p-5">
+              <Card key={c.id} className={`p-5 ${c.closed ? "opacity-70" : ""}`}>
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="w-10 h-10 rounded-md bg-slate-900 flex items-center justify-center text-white shrink-0"><CardIcon size={18} /></div>
@@ -134,9 +142,10 @@ export default function CreditCards() {
 
                 <div className="flex gap-2 flex-wrap justify-end mt-4 pt-3 border-t border-slate-100">
                   <Button variant="outline" onClick={() => navigate(`/credit-cards/${c.id}`)} data-testid={`card-ledger-${c.id}`}>Ledger</Button>
-                  <Button variant="outline" onClick={() => openPay(c.id)} data-testid={`card-pay-bill-${c.id}`}>Pay Bill</Button>
-                  <Button variant="outline" onClick={() => { setTxnCard(c); setTxn({ kind: "spend", amount: "", account_id: "", description: "", date: todayISO() }); }} data-testid={TID.cardTxnBtn(c.id)}>Add Txn</Button>
+                  {!c.closed && <Button variant="outline" onClick={() => openPay(c.id)} data-testid={`card-pay-bill-${c.id}`}>Pay Bill</Button>}
+                  {!c.closed && <Button variant="outline" onClick={() => { setTxnCard(c); setTxn({ kind: "spend", amount: "", account_id: "", description: "", date: todayISO() }); }} data-testid={TID.cardTxnBtn(c.id)}>Add Txn</Button>}
                   <Button variant="outline" onClick={() => openEdit(c)} data-testid={`card-edit-${c.id}`}><Pencil size={14} /> Edit</Button>
+                  <Button variant="outline" onClick={() => toggleClose(c)} data-testid={`card-close-${c.id}`}>{c.closed ? <><ArchiveRestore size={14} /> Reopen</> : <><Archive size={14} /> Close</>}</Button>
                 </div>
               </Card>
             );
@@ -156,13 +165,13 @@ export default function CreditCards() {
             {!editingId && <Field label="Opening Outstanding"><Input type="number" step="0.01" value={card.opening_outstanding} onChange={(e) => setCard({ ...card, opening_outstanding: e.target.value })} className="font-mono" /></Field>}
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Statement Date"><Input type="date" value={card.statement_date} onChange={(e) => setCard({ ...card, statement_date: e.target.value })} /></Field>
-            <Field label="Payment Due Date"><Input type="date" value={card.due_date} onChange={(e) => setCard({ ...card, due_date: e.target.value })} /></Field>
+            <Field label="Statement Date"><DatePicker testid="card-statement-date" value={card.statement_date} onChange={(v) => setCard({ ...card, statement_date: v })} /></Field>
+            <Field label="Payment Due Date"><DatePicker testid="card-due-date" value={card.due_date} onChange={(v) => setCard({ ...card, due_date: v })} /></Field>
           </div>
           <Field label="Minimum Due"><Input type="number" step="0.01" value={card.min_due} onChange={(e) => setCard({ ...card, min_due: e.target.value })} className="font-mono" /></Field>
           <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={card.allow_over_limit} onChange={(e) => setCard({ ...card, allow_over_limit: e.target.checked })} className="w-4 h-4 accent-blue-600" /> Allow over-limit transactions</label>
           <Field label="Notes"><Textarea rows={2} value={card.notes} onChange={(e) => setCard({ ...card, notes: e.target.value })} /></Field>
-          <div className="flex justify-end gap-2 pt-2"><Button type="button" variant="outline" onClick={() => setAddOpen(false)}>Cancel</Button><Button type="submit">{editingId ? "Save" : "Add"}</Button></div>
+          <div className="flex justify-end gap-2 pt-2"><Button type="button" variant="outline" onClick={() => setAddOpen(false)}>Cancel</Button><Button type="submit" data-testid={TID.cardSubmit}>{editingId ? "Save" : "Add"}</Button></div>
         </form>
       </Modal>
 
@@ -182,7 +191,7 @@ export default function CreditCards() {
             </Field>
           )}
           <Field label="Description"><Input value={txn.description} onChange={(e) => setTxn({ ...txn, description: e.target.value })} /></Field>
-          <Field label="Date"><Input type="date" value={txn.date} onChange={(e) => setTxn({ ...txn, date: e.target.value })} /></Field>
+          <Field label="Date"><DatePicker testid="cardtxn-date" value={txn.date} onChange={(v) => setTxn({ ...txn, date: v })} /></Field>
           <div className="flex justify-end gap-2 pt-2"><Button type="button" variant="outline" onClick={() => setTxnCard(null)}>Cancel</Button><Button type="submit">Save</Button></div>
         </form>
       </Modal>
@@ -193,7 +202,7 @@ export default function CreditCards() {
           <Field label="Credit Card">
             <Select data-testid="pay-bill-card-select" value={pay.card_id} onChange={(e) => setPay({ ...pay, card_id: e.target.value })} required>
               <option value="">Select card</option>
-              {cards.map((c) => <option key={c.id} value={c.id}>{c.name} — outstanding {formatINR(c.outstanding)}</option>)}
+              {openCards.map((c) => <option key={c.id} value={c.id}>{c.name} — outstanding {formatINR(c.outstanding)}</option>)}
             </Select>
           </Field>
           <Field label="Pay From Account" hint="This Cash/Bank/UPI account will be debited">
@@ -208,7 +217,7 @@ export default function CreditCards() {
               Pay full outstanding ({formatINR(sel ? sel.outstanding : 0)})
             </button>
           ); })()}
-          <Field label="Date"><Input type="date" value={pay.date} onChange={(e) => setPay({ ...pay, date: e.target.value })} /></Field>
+          <Field label="Date"><DatePicker testid="paybill-date" value={pay.date} onChange={(v) => setPay({ ...pay, date: v })} /></Field>
           <div className="flex justify-end gap-2 pt-2"><Button type="button" variant="outline" onClick={() => setPayOpen(false)}>Cancel</Button><Button type="submit" data-testid="pay-bill-submit">Pay Bill</Button></div>
         </form>
       </Modal>
