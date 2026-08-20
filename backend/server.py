@@ -398,24 +398,21 @@ async def adjust_account(account_id: str, data: AdjustInput, user: dict = Depend
     return clean(await db.accounts.find_one({"id": account_id}))
 
 
-@api_router.get("/accounts/{account_id}/ledger")
-async def account_ledger(account_id: str, from_date: Optional[str] = None,
-                         to_date: Optional[str] = None, txn_type: Optional[str] = None,
-                         user: dict = Depends(get_current_user)):
-    acc = await db.accounts.find_one({"id": account_id})
-    if not acc:
-        raise HTTPException(status_code=404, detail="Account not found")
-    # fetch all txns ascending to compute running balance, then filter
-    all_txns = await db.transactions.find({"account_id": account_id}).sort("created_at", 1).to_list(10000)
+def _ledger_rows(txns: list, running_key: str, spend_pred, type_key: str,
+                 type_filter, from_date, to_date, accs: dict = None) -> list:
+    """Compute a running balance/outstanding across ascending txns, attach it (and an
+    optional account_name), then apply type + date-window filters and return rows
+    newest-first. Shared by the account and credit-card ledgers."""
     running = 0.0
-    for t in all_txns:
-        running = round(running + (t["amount"] if t["direction"] == "credit" else -t["amount"]), 2)
-        t["running_balance"] = running
+    for t in txns:
+        running = round(running + (t["amount"] if spend_pred(t) else -t["amount"]), 2)
+        t[running_key] = running
+        if accs is not None:
+            t["account_name"] = accs.get(t.get("account_id"))
         t.pop("_id", None)
-    # apply filters
     filtered = []
-    for t in all_txns:
-        if txn_type and t["txn_type"] != txn_type:
+    for t in txns:
+        if type_filter and t[type_key] != type_filter:
             continue
         if from_date and t["date"][:10] < from_date:
             continue
@@ -423,7 +420,20 @@ async def account_ledger(account_id: str, from_date: Optional[str] = None,
             continue
         filtered.append(t)
     filtered.reverse()
-    return {"account": clean(acc), "transactions": filtered}
+    return filtered
+
+
+@api_router.get("/accounts/{account_id}/ledger")
+async def account_ledger(account_id: str, from_date: Optional[str] = None,
+                         to_date: Optional[str] = None, txn_type: Optional[str] = None,
+                         user: dict = Depends(get_current_user)):
+    acc = await db.accounts.find_one({"id": account_id})
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    all_txns = await db.transactions.find({"account_id": account_id}).sort("created_at", 1).to_list(10000)
+    rows = _ledger_rows(all_txns, "running_balance", lambda t: t["direction"] == "credit",
+                        "txn_type", txn_type, from_date, to_date)
+    return {"account": clean(acc), "transactions": rows}
 
 
 # ---------------------------------------------------------------------------
@@ -808,23 +818,9 @@ async def card_ledger(card_id: str, from_date: Optional[str] = None,
         raise HTTPException(status_code=404, detail="Card not found")
     all_txns = await db.credit_card_txns.find({"card_id": card_id}).sort("created_at", 1).to_list(10000)
     accs = {a["id"]: a["name"] for a in await db.accounts.find({}).to_list(1000)}
-    running = 0.0
-    for t in all_txns:
-        running = round(running + (t["amount"] if t["kind"] == "spend" else -t["amount"]), 2)
-        t["running_outstanding"] = running
-        t["account_name"] = accs.get(t.get("account_id"))
-        t.pop("_id", None)
-    filtered = []
-    for t in all_txns:
-        if kind and t["kind"] != kind:
-            continue
-        if from_date and t["date"][:10] < from_date:
-            continue
-        if to_date and t["date"][:10] > to_date:
-            continue
-        filtered.append(t)
-    filtered.reverse()
-    return {"card": clean(card), "transactions": filtered}
+    rows = _ledger_rows(all_txns, "running_outstanding", lambda t: t["kind"] == "spend",
+                        "kind", kind, from_date, to_date, accs=accs)
+    return {"card": clean(card), "transactions": rows}
 
 
 @api_router.post("/creditcards/{card_id}/transactions")
