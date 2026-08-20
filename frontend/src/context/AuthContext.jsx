@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState, useMemo, useCallback } from "react";
 import api from "@/lib/api";
 
 const AuthContext = createContext(null);
@@ -36,29 +36,34 @@ export const AuthProvider = ({ children }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const login = async (email, password) => {
+  const login = useCallback(async (email, password) => {
     const res = await api.post("/auth/login", { email, password });
     localStorage.setItem("mbt_token", res.data.access_token);
     setUser(res.data.user);
     return res.data.user;
-  };
+  }, []);
 
-  const setup = async (email, password, name) => {
+  const setup = useCallback(async (email, password, name) => {
     const res = await api.post("/auth/setup", { email, password, name });
     localStorage.setItem("mbt_token", res.data.access_token);
     setNeedsSetup(false);
     setUser(res.data.user);
     return res.data.user;
-  };
+  }, []);
 
-  const logout = () => {
+  const logout = useCallback(() => {
     localStorage.removeItem("mbt_token");
     setUser(false);
     window.location.href = "/login";
-  };
+  }, []);
+
+  const value = useMemo(
+    () => ({ user, needsSetup, loading, login, setup, logout }),
+    [user, needsSetup, loading, login, setup, logout]
+  );
 
   return (
-    <AuthContext.Provider value={{ user, needsSetup, loading, login, setup, logout }}>
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );
