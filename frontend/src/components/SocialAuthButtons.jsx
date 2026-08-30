@@ -9,24 +9,6 @@ const GoogleIcon = () => (
   </svg>
 );
 
-const FacebookIcon = () => (
-  <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-    <path
-      fill="#1877F2"
-      d="M18 9a9 9 0 1 0-10.4 8.89v-6.29H5.31V9h2.29V7.02c0-2.26 1.35-3.51 3.41-3.51.99 0 2.02.18 2.02.18v2.22h-1.14c-1.12 0-1.47.7-1.47 1.42V9h2.5l-.4 2.6h-2.1v6.29A9 9 0 0 0 18 9Z"
-    />
-  </svg>
-);
-
-const AppleIcon = () => (
-  <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-    <path
-      fill="#000"
-      d="M14.94 6.13a3.5 3.5 0 0 0-1.67 2.94c0 1.6.94 2.68 1.98 3.28-.36 1.07-.9 2.02-1.6 2.87-.65.79-1.35 1.5-2.28 1.5-.9 0-1.2-.55-2.27-.55-1.05 0-1.4.57-2.24.57-.9 0-1.6-.75-2.28-1.6-1.35-1.7-2.4-4.4-1.05-6.55.7-1.13 1.86-1.85 3.05-1.87.85-.02 1.6.6 2.16.6.55 0 1.5-.74 2.53-.63a3.1 3.1 0 0 1 2.67 1.44Zm-3.02-2.86c.5-.6.85-1.42.76-2.27-.72.03-1.6.5-2.12 1.1-.46.53-.87 1.38-.76 2.2.8.06 1.6-.4 2.12-1.03Z"
-    />
-  </svg>
-);
-
 const BUTTON_CLASS =
   "w-full h-11 flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white text-slate-700 font-medium text-sm hover:bg-slate-50 transition-colors";
 
@@ -35,12 +17,6 @@ export default function SocialAuthButtons() {
     <div className="space-y-2.5">
       <a href={`${API}/auth/google/login`} className={BUTTON_CLASS}>
         <GoogleIcon /> Continue with Google
-      </a>
-      <a href={`${API}/auth/facebook/login`} className={BUTTON_CLASS}>
-        <FacebookIcon /> Continue with Facebook
-      </a>
-      <a href={`${API}/auth/apple/login`} className={BUTTON_CLASS}>
-        <AppleIcon /> Continue with Apple
       </a>
     </div>
   );

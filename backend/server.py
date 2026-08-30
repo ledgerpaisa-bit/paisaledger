@@ -18,8 +18,6 @@ import uuid
 import secrets
 import bcrypt
 import jwt
-from jwt.algorithms import RSAAlgorithm
-import json
 import re
 import hmac
 import asyncio
@@ -445,16 +443,10 @@ async def logout(user: dict = Depends(get_current_user)):
 
 
 # ---------------------------------------------------------------------------
-# Social login (Google / Facebook / Sign in with Apple)
+# Social login (Google)
 # ---------------------------------------------------------------------------
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
-FACEBOOK_CLIENT_ID = os.environ.get("FACEBOOK_CLIENT_ID")
-FACEBOOK_CLIENT_SECRET = os.environ.get("FACEBOOK_CLIENT_SECRET")
-APPLE_CLIENT_ID = os.environ.get("APPLE_CLIENT_ID")  # the Services ID, e.g. com.paisaledger.web
-APPLE_TEAM_ID = os.environ.get("APPLE_TEAM_ID")
-APPLE_KEY_ID = os.environ.get("APPLE_KEY_ID")
-APPLE_PRIVATE_KEY = os.environ.get("APPLE_PRIVATE_KEY", "").replace("\\n", "\n")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://paisaledger-coral.vercel.app")
 BACKEND_PUBLIC_URL = os.environ.get("BACKEND_PUBLIC_URL", "https://paisaledger.onrender.com")
 OAUTH_STATE_COOKIE = "oauth_state"
@@ -465,9 +457,7 @@ def _oauth_redirect_uri(provider: str) -> str:
 
 
 def _set_oauth_state_cookie(resp: RedirectResponse, state: str) -> None:
-    # samesite="none" so the cookie still comes back on Apple's cross-site form POST
-    # callback, not just Google/Facebook's GET redirect.
-    resp.set_cookie(OAUTH_STATE_COOKIE, state, max_age=600, httponly=True, secure=True, samesite="none")
+    resp.set_cookie(OAUTH_STATE_COOKIE, state, max_age=600, httponly=True, secure=True, samesite="lax")
 
 
 async def _oauth_login_user(email: str, name: str = "") -> str:
@@ -488,18 +478,6 @@ async def _oauth_login_user(email: str, name: str = "") -> str:
         }
         await db.users.insert_one(user)
     return create_access_token(user["id"], user["email"])
-
-
-def _apple_client_secret() -> str:
-    now = datetime.now(timezone.utc)
-    payload = {
-        "iss": APPLE_TEAM_ID,
-        "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(minutes=20)).timestamp()),
-        "aud": "https://appleid.apple.com",
-        "sub": APPLE_CLIENT_ID,
-    }
-    return jwt.encode(payload, APPLE_PRIVATE_KEY, algorithm="ES256", headers={"kid": APPLE_KEY_ID})
 
 
 @api_router.get("/auth/google/login")
@@ -550,129 +528,6 @@ async def google_callback(request: Request, code: Optional[str] = None, state: O
         logger.error(f"Google OAuth callback failed: {e}")
         return RedirectResponse(f"{FRONTEND_URL}/login?error=google_auth_failed")
     resp = RedirectResponse(f"{FRONTEND_URL}/oauth-callback?token={jwt_token}")
-    resp.delete_cookie(OAUTH_STATE_COOKIE)
-    return resp
-
-
-@api_router.get("/auth/facebook/login")
-async def facebook_login():
-    if not (FACEBOOK_CLIENT_ID and FACEBOOK_CLIENT_SECRET):
-        raise HTTPException(status_code=503, detail="Facebook sign-in is not configured")
-    state = new_id()
-    params = {
-        "client_id": FACEBOOK_CLIENT_ID,
-        "redirect_uri": _oauth_redirect_uri("facebook"),
-        "response_type": "code",
-        "scope": "email,public_profile",
-        "state": state,
-    }
-    resp = RedirectResponse("https://www.facebook.com/v19.0/dialog/oauth?" + urlencode(params))
-    _set_oauth_state_cookie(resp, state)
-    return resp
-
-
-@api_router.get("/auth/facebook/callback")
-async def facebook_callback(request: Request, code: Optional[str] = None, state: Optional[str] = None,
-                             error: Optional[str] = None):
-    cookie_state = request.cookies.get(OAUTH_STATE_COOKIE)
-    if error or not code or not state or not cookie_state or state != cookie_state:
-        return RedirectResponse(f"{FRONTEND_URL}/login?error=facebook_auth_failed")
-    try:
-        async with httpx.AsyncClient(timeout=15) as http:
-            token_resp = await http.get("https://graph.facebook.com/v19.0/oauth/access_token", params={
-                "client_id": FACEBOOK_CLIENT_ID,
-                "client_secret": FACEBOOK_CLIENT_SECRET,
-                "code": code,
-                "redirect_uri": _oauth_redirect_uri("facebook"),
-            })
-            token_resp.raise_for_status()
-            access_token = token_resp.json()["access_token"]
-            info_resp = await http.get("https://graph.facebook.com/me", params={
-                "fields": "id,name,email",
-                "access_token": access_token,
-            })
-            info_resp.raise_for_status()
-            info = info_resp.json()
-        email = info.get("email")
-        if not email:
-            return RedirectResponse(f"{FRONTEND_URL}/login?error=facebook_no_email")
-        jwt_token = await _oauth_login_user(email, info.get("name", ""))
-    except Exception as e:
-        logger.error(f"Facebook OAuth callback failed: {e}")
-        return RedirectResponse(f"{FRONTEND_URL}/login?error=facebook_auth_failed")
-    resp = RedirectResponse(f"{FRONTEND_URL}/oauth-callback?token={jwt_token}")
-    resp.delete_cookie(OAUTH_STATE_COOKIE)
-    return resp
-
-
-@api_router.get("/auth/apple/login")
-async def apple_login():
-    if not (APPLE_CLIENT_ID and APPLE_TEAM_ID and APPLE_KEY_ID and APPLE_PRIVATE_KEY):
-        raise HTTPException(status_code=503, detail="Sign in with Apple is not configured")
-    state = new_id()
-    params = {
-        "client_id": APPLE_CLIENT_ID,
-        "redirect_uri": _oauth_redirect_uri("apple"),
-        "response_type": "code",
-        "response_mode": "form_post",
-        "scope": "name email",
-        "state": state,
-    }
-    resp = RedirectResponse("https://appleid.apple.com/auth/authorize?" + urlencode(params))
-    _set_oauth_state_cookie(resp, state)
-    return resp
-
-
-@api_router.post("/auth/apple/callback")
-async def apple_callback(request: Request):
-    # Apple posts back (response_mode=form_post) rather than redirecting with a GET.
-    form = await request.form()
-    code = form.get("code")
-    state = form.get("state")
-    error = form.get("error")
-    cookie_state = request.cookies.get(OAUTH_STATE_COOKIE)
-    if error or not code or not state or not cookie_state or state != cookie_state:
-        return RedirectResponse(f"{FRONTEND_URL}/login?error=apple_auth_failed", status_code=303)
-    try:
-        client_secret = _apple_client_secret()
-        async with httpx.AsyncClient(timeout=15) as http:
-            token_resp = await http.post("https://appleid.apple.com/auth/token", data={
-                "client_id": APPLE_CLIENT_ID,
-                "client_secret": client_secret,
-                "code": code,
-                "redirect_uri": _oauth_redirect_uri("apple"),
-                "grant_type": "authorization_code",
-            })
-            token_resp.raise_for_status()
-            id_token = token_resp.json()["id_token"]
-            jwks_resp = await http.get("https://appleid.apple.com/auth/keys")
-            jwks_resp.raise_for_status()
-            jwks = jwks_resp.json()["keys"]
-        unverified_header = jwt.get_unverified_header(id_token)
-        key_data = next((k for k in jwks if k["kid"] == unverified_header["kid"]), None)
-        if not key_data:
-            raise ValueError("Apple signing key not found")
-        public_key = RSAAlgorithm.from_jwk(json.dumps(key_data))
-        claims = jwt.decode(id_token, key=public_key, algorithms=["RS256"], audience=APPLE_CLIENT_ID)
-        email = claims.get("email")
-        if not email:
-            return RedirectResponse(f"{FRONTEND_URL}/login?error=apple_no_email", status_code=303)
-        # Apple only ever sends the user's name once, on the very first authorization,
-        # as a JSON blob in the `user` form field.
-        name = ""
-        user_field = form.get("user")
-        if user_field:
-            try:
-                u = json.loads(user_field)
-                n = u.get("name") or {}
-                name = " ".join(filter(None, [n.get("firstName"), n.get("lastName")]))
-            except Exception:
-                pass
-        jwt_token = await _oauth_login_user(email, name)
-    except Exception as e:
-        logger.error(f"Apple OAuth callback failed: {e}")
-        return RedirectResponse(f"{FRONTEND_URL}/login?error=apple_auth_failed", status_code=303)
-    resp = RedirectResponse(f"{FRONTEND_URL}/oauth-callback?token={jwt_token}", status_code=303)
     resp.delete_cookie(OAUTH_STATE_COOKIE)
     return resp
 

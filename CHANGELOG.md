@@ -2,6 +2,11 @@
 
 All notable changes to Paisa Ledger are logged here — one entry per branch/merge, newest first.
 
+## 2026-08-30 — branch `remove-facebook-apple`
+
+- Removed the "Continue with Facebook" and "Continue with Apple" buttons and their backend OAuth routes (`/api/auth/facebook/*`, `/api/auth/apple/*`). Google sign-in stays.
+- Why: the user decided not to set up Facebook/Apple developer accounts for now — Apple in particular needs a paid ($99/year) Developer Program membership. Can be re-added later if wanted.
+
 ## 2026-08-30 — merged `feature/social-login`
 
 - Added "Continue with Google", "Continue with Facebook", and "Continue with Apple" to the login and signup pages. Backend implements the OAuth2 authorization-code flow for each provider (`/api/auth/{provider}/login` and `/api/auth/{provider}/callback`); signing in with any provider finds-or-creates a user by email and issues the same JWT used by password login.
