@@ -222,11 +222,11 @@ class PoonjiCreate(BaseModel):
 # ---------------------------------------------------------------------------
 # Core money movement
 # ---------------------------------------------------------------------------
-async def record_transaction(account_id, txn_type, description, amount, direction,
+async def record_transaction(account_id, txn_type, description, amount, direction, user_id,
                              source_account_id=None, dest_account_id=None,
                              reference_id=None, date=None, enforce_positive=True):
     """direction: 'credit' increases balance, 'debit' decreases balance."""
-    account = await db.accounts.find_one({"id": account_id})
+    account = await db.accounts.find_one({"id": account_id, "user_id": user_id})
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
@@ -242,6 +242,7 @@ async def record_transaction(account_id, txn_type, description, amount, directio
 
     txn = {
         "id": new_id(),
+        "user_id": user_id,
         "account_id": account_id,
         "date": date or now_iso(),
         "txn_type": txn_type,
@@ -255,7 +256,7 @@ async def record_transaction(account_id, txn_type, description, amount, directio
         "created_at": now_iso(),
     }
     await db.transactions.insert_one(txn)
-    await db.accounts.update_one({"id": account_id}, {"$set": {"current_balance": new_balance}})
+    await db.accounts.update_one({"id": account_id, "user_id": user_id}, {"$set": {"current_balance": new_balance}})
     txn.pop("_id", None)
     return txn
 
@@ -271,15 +272,15 @@ def clean(doc: dict) -> dict:
 # ---------------------------------------------------------------------------
 @api_router.get("/auth/setup-status")
 async def setup_status():
-    count = await db.users.count_documents({})
-    return {"needs_setup": count == 0}
+    # Kept for backward compatibility with old clients; registration is always open now.
+    return {"needs_setup": False}
 
 
-@api_router.post("/auth/setup")
-async def setup_owner(data: SetupInput):
-    count = await db.users.count_documents({})
-    if count > 0:
-        raise HTTPException(status_code=409, detail="Owner account already exists. Please sign in.")
+@api_router.post("/auth/register")
+async def register(data: SetupInput):
+    existing = await db.users.find_one({"email": data.email.lower()})
+    if existing:
+        raise HTTPException(status_code=409, detail="An account with this email already exists. Please sign in.")
     if len(data.password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters long")
     email = data.email.lower()
@@ -298,6 +299,10 @@ async def setup_owner(data: SetupInput):
         "token_type": "bearer",
         "user": {"id": user["id"], "email": user["email"], "name": user["name"]},
     }
+
+
+# Old path kept as an alias so any already-cached frontend build keeps working.
+api_router.add_api_route("/auth/setup", register, methods=["POST"])
 
 
 @api_router.post("/auth/login")
@@ -329,7 +334,7 @@ async def logout(user: dict = Depends(get_current_user)):
 # ---------------------------------------------------------------------------
 @api_router.get("/accounts")
 async def list_accounts(active: Optional[bool] = None, user: dict = Depends(get_current_user)):
-    query = {}
+    query = {"user_id": user["id"]}
     if active is not None:
         query["active"] = active
     accounts = await db.accounts.find(query).sort("created_at", 1).to_list(1000)
@@ -340,6 +345,7 @@ async def list_accounts(active: Optional[bool] = None, user: dict = Depends(get_
 async def create_account(data: AccountCreate, user: dict = Depends(get_current_user)):
     acc = {
         "id": new_id(),
+        "user_id": user["id"],
         "type": data.type,
         "name": data.name,
         "bank_name": data.bank_name,
@@ -356,9 +362,9 @@ async def create_account(data: AccountCreate, user: dict = Depends(get_current_u
         await record_transaction(
             acc["id"], "opening", "Opening balance", abs(data.opening_balance),
             "credit" if data.opening_balance > 0 else "debit",
-            enforce_positive=False,
+            user_id=user["id"], enforce_positive=False,
         )
-    result = await db.accounts.find_one({"id": acc["id"]})
+    result = await db.accounts.find_one({"id": acc["id"], "user_id": user["id"]})
     return clean(result)
 
 
@@ -367,25 +373,25 @@ async def update_account(account_id: str, data: AccountUpdate, user: dict = Depe
     updates = {k: v for k, v in data.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
-    res = await db.accounts.update_one({"id": account_id}, {"$set": updates})
+    res = await db.accounts.update_one({"id": account_id, "user_id": user["id"]}, {"$set": updates})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Account not found")
-    return clean(await db.accounts.find_one({"id": account_id}))
+    return clean(await db.accounts.find_one({"id": account_id, "user_id": user["id"]}))
 
 
 @api_router.patch("/accounts/{account_id}/status")
 async def toggle_account_status(account_id: str, user: dict = Depends(get_current_user)):
-    acc = await db.accounts.find_one({"id": account_id})
+    acc = await db.accounts.find_one({"id": account_id, "user_id": user["id"]})
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
     new_status = not acc.get("active", True)
-    await db.accounts.update_one({"id": account_id}, {"$set": {"active": new_status}})
-    return clean(await db.accounts.find_one({"id": account_id}))
+    await db.accounts.update_one({"id": account_id, "user_id": user["id"]}, {"$set": {"active": new_status}})
+    return clean(await db.accounts.find_one({"id": account_id, "user_id": user["id"]}))
 
 
 @api_router.post("/accounts/{account_id}/adjust")
 async def adjust_account(account_id: str, data: AdjustInput, user: dict = Depends(get_current_user)):
-    acc = await db.accounts.find_one({"id": account_id})
+    acc = await db.accounts.find_one({"id": account_id, "user_id": user["id"]})
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
     delta = round(data.new_balance - acc["current_balance"], 2)
@@ -393,9 +399,10 @@ async def adjust_account(account_id: str, data: AdjustInput, user: dict = Depend
         return clean(acc)
     await record_transaction(
         account_id, "adjustment", f"Manual adjustment: {data.reason}",
-        abs(delta), "credit" if delta > 0 else "debit", enforce_positive=False,
+        abs(delta), "credit" if delta > 0 else "debit",
+        user_id=user["id"], enforce_positive=False,
     )
-    return clean(await db.accounts.find_one({"id": account_id}))
+    return clean(await db.accounts.find_one({"id": account_id, "user_id": user["id"]}))
 
 
 def _ledger_rows(txns: list, running_key: str, spend_pred, type_key: str,
@@ -427,10 +434,10 @@ def _ledger_rows(txns: list, running_key: str, spend_pred, type_key: str,
 async def account_ledger(account_id: str, from_date: Optional[str] = None,
                          to_date: Optional[str] = None, txn_type: Optional[str] = None,
                          user: dict = Depends(get_current_user)):
-    acc = await db.accounts.find_one({"id": account_id})
+    acc = await db.accounts.find_one({"id": account_id, "user_id": user["id"]})
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
-    all_txns = await db.transactions.find({"account_id": account_id}).sort("created_at", 1).to_list(10000)
+    all_txns = await db.transactions.find({"account_id": account_id, "user_id": user["id"]}).sort("created_at", 1).to_list(10000)
     rows = _ledger_rows(all_txns, "running_balance", lambda t: t["direction"] == "credit",
                         "txn_type", txn_type, from_date, to_date)
     return {"account": clean(acc), "transactions": rows}
@@ -445,8 +452,8 @@ async def create_transfer(data: TransferInput, user: dict = Depends(get_current_
         raise HTTPException(status_code=400, detail="Source and destination must be different")
     if data.amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be positive")
-    src = await db.accounts.find_one({"id": data.source_account_id})
-    dst = await db.accounts.find_one({"id": data.dest_account_id})
+    src = await db.accounts.find_one({"id": data.source_account_id, "user_id": user["id"]})
+    dst = await db.accounts.find_one({"id": data.dest_account_id, "user_id": user["id"]})
     if not src or not dst:
         raise HTTPException(status_code=404, detail="Account not found")
     ref = new_id()
@@ -456,19 +463,19 @@ async def create_transfer(data: TransferInput, user: dict = Depends(get_current_
     await record_transaction(
         data.source_account_id, "transfer_out", desc + (f" — {data.notes}" if data.notes else ""),
         data.amount, "debit", source_account_id=data.source_account_id,
-        dest_account_id=data.dest_account_id, reference_id=ref, date=date,
+        dest_account_id=data.dest_account_id, reference_id=ref, date=date, user_id=user["id"],
     )
     await record_transaction(
         data.dest_account_id, "transfer_in", desc + (f" — {data.notes}" if data.notes else ""),
         data.amount, "credit", source_account_id=data.source_account_id,
-        dest_account_id=data.dest_account_id, reference_id=ref, date=date,
+        dest_account_id=data.dest_account_id, reference_id=ref, date=date, user_id=user["id"],
     )
     return {"success": True, "reference_id": ref}
 
 
 @api_router.get("/transfers")
 async def list_transfers(user: dict = Depends(get_current_user)):
-    txns = await db.transactions.find({"txn_type": "transfer_out"}).sort("created_at", -1).to_list(1000)
+    txns = await db.transactions.find({"txn_type": "transfer_out", "user_id": user["id"]}).sort("created_at", -1).to_list(1000)
     return [clean(t) for t in txns]
 
 
@@ -477,8 +484,8 @@ async def list_transfers(user: dict = Depends(get_current_user)):
 # ---------------------------------------------------------------------------
 @api_router.get("/retail/sales")
 async def list_sales(user: dict = Depends(get_current_user)):
-    sales = await db.sales.find({}).sort("created_at", -1).to_list(2000)
-    accounts = {a["id"]: a["name"] for a in await db.accounts.find({}).to_list(1000)}
+    sales = await db.sales.find({"user_id": user["id"]}).sort("created_at", -1).to_list(2000)
+    accounts = {a["id"]: a["name"] for a in await db.accounts.find({"user_id": user["id"]}).to_list(1000)}
     for s in sales:
         s.pop("_id", None)
         s["account_name"] = accounts.get(s.get("account_id"), "—")
@@ -487,12 +494,13 @@ async def list_sales(user: dict = Depends(get_current_user)):
 
 @api_router.post("/retail/sales")
 async def create_sale(data: RetailSaleInput, user: dict = Depends(get_current_user)):
-    acc = await db.accounts.find_one({"id": data.account_id})
+    acc = await db.accounts.find_one({"id": data.account_id, "user_id": user["id"]})
     if not acc:
         raise HTTPException(status_code=404, detail="Payment account not found")
     profit = round(data.sale_price - data.cost_price, 2)
     sale = {
         "id": new_id(),
+        "user_id": user["id"],
         "mobile_model": data.mobile_model,
         "imei": data.imei,
         "sale_price": round(data.sale_price, 2),
@@ -507,15 +515,15 @@ async def create_sale(data: RetailSaleInput, user: dict = Depends(get_current_us
     await db.sales.insert_one(sale)
     if data.stock_item_id:
         await db.stock.update_one(
-            {"id": data.stock_item_id},
+            {"id": data.stock_item_id, "user_id": user["id"]},
             {"$set": {"status": "sold", "sale_id": sale["id"]}},
         )
     imei_str = f" (IMEI {data.imei})" if data.imei else ""
     await record_transaction(
         data.account_id, "retail_sale", f"Retail sale: {data.mobile_model}{imei_str}",
-        data.sale_price, "credit", reference_id=sale["id"], date=sale["date"],
+        data.sale_price, "credit", reference_id=sale["id"], date=sale["date"], user_id=user["id"],
     )
-    return clean(await db.sales.find_one({"id": sale["id"]}))
+    return clean(await db.sales.find_one({"id": sale["id"], "user_id": user["id"]}))
 
 
 # ---------------------------------------------------------------------------
@@ -523,7 +531,7 @@ async def create_sale(data: RetailSaleInput, user: dict = Depends(get_current_us
 # ---------------------------------------------------------------------------
 @api_router.get("/stock")
 async def list_stock(status: Optional[str] = None, user: dict = Depends(get_current_user)):
-    query = {}
+    query = {"user_id": user["id"]}
     if status:
         query["status"] = status
     items = await db.stock.find(query).sort("created_at", -1).to_list(5000)
@@ -536,6 +544,7 @@ async def create_stock(data: StockCreate, user: dict = Depends(get_current_user)
     pm = data.payment_method or "none"
     item = {
         "id": new_id(),
+        "user_id": user["id"],
         "mobile_model": data.mobile_model,
         "imei": data.imei,
         "purchase_price": amount,
@@ -557,12 +566,12 @@ async def create_stock(data: StockCreate, user: dict = Depends(get_current_user)
         # Debits Cash/Bank/UPI (Paisa decreases). Raises if insufficient balance.
         await record_transaction(
             data.account_id, "purchase", label, amount, "debit",
-            reference_id=item["id"], date=item["date"],
+            reference_id=item["id"], date=item["date"], user_id=user["id"],
         )
     elif pm == "credit_card":
         if not data.card_id:
             raise HTTPException(status_code=400, detail="Select a credit card for this purchase")
-        card = await db.credit_cards.find_one({"id": data.card_id})
+        card = await db.credit_cards.find_one({"id": data.card_id, "user_id": user["id"]})
         if not card:
             raise HTTPException(status_code=404, detail="Credit card not found")
         if card.get("closed"):
@@ -572,28 +581,28 @@ async def create_stock(data: StockCreate, user: dict = Depends(get_current_user)
             raise HTTPException(status_code=400, detail=f"Purchase exceeds available credit limit (₹{available:.0f}). Enable over-limit for this card to allow it.")
         new_out = round(card["outstanding"] + amount, 2)
         await db.credit_card_txns.insert_one({
-            "id": new_id(), "card_id": data.card_id, "kind": "spend",
+            "id": new_id(), "user_id": user["id"], "card_id": data.card_id, "kind": "spend",
             "amount": amount, "account_id": None, "description": label,
             "category": "purchase",
             "date": item["date"], "outstanding_after": new_out, "created_at": now_iso(),
         })
         # Increases this card's outstanding; Cash/Bank/UPI/Paisa unchanged.
-        await db.credit_cards.update_one({"id": data.card_id}, {"$set": {"outstanding": new_out}})
+        await db.credit_cards.update_one({"id": data.card_id, "user_id": user["id"]}, {"$set": {"outstanding": new_out}})
     elif pm == "poonji":
         pid = new_id()
         await db.poonji.insert_one({
-            "id": pid, "amount": amount, "description": label,
+            "id": pid, "user_id": user["id"], "amount": amount, "description": label,
             "date": item["date"], "created_at": now_iso(),
         })
         item["poonji_id"] = pid
 
     await db.stock.insert_one(item)
-    return clean(await db.stock.find_one({"id": item["id"]}))
+    return clean(await db.stock.find_one({"id": item["id"], "user_id": user["id"]}))
 
 
 @api_router.delete("/stock/{item_id}")
 async def delete_stock(item_id: str, user: dict = Depends(get_current_user)):
-    item = await db.stock.find_one({"id": item_id})
+    item = await db.stock.find_one({"id": item_id, "user_id": user["id"]})
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
     if item.get("status") == "sold":
@@ -603,16 +612,16 @@ async def delete_stock(item_id: str, user: dict = Depends(get_current_user)):
             status_code=400,
             detail="Cannot delete a purchase that has a recorded payment — it would break the audit ledger.",
         )
-    await db.stock.delete_one({"id": item_id})
+    await db.stock.delete_one({"id": item_id, "user_id": user["id"]})
     return {"success": True}
 
 
 # ---------------------------------------------------------------------------
 # Wholesale
 # ---------------------------------------------------------------------------
-async def customer_outstanding(customer_id: str) -> float:
-    supplies = await db.wholesale_supplies.find({"customer_id": customer_id}).to_list(5000)
-    payments = await db.wholesale_payments.find({"customer_id": customer_id}).to_list(5000)
+async def customer_outstanding(customer_id: str, user_id: str) -> float:
+    supplies = await db.wholesale_supplies.find({"customer_id": customer_id, "user_id": user_id}).to_list(5000)
+    payments = await db.wholesale_payments.find({"customer_id": customer_id, "user_id": user_id}).to_list(5000)
     total_supply = sum(s["amount"] for s in supplies)
     total_paid = sum(p["amount"] for p in payments)
     return round(total_supply - total_paid, 2)
@@ -620,18 +629,18 @@ async def customer_outstanding(customer_id: str) -> float:
 
 @api_router.get("/wholesale/customers")
 async def list_customers(user: dict = Depends(get_current_user)):
-    customers = await db.wholesale_customers.find({}).sort("created_at", -1).to_list(2000)
+    customers = await db.wholesale_customers.find({"user_id": user["id"]}).sort("created_at", -1).to_list(2000)
     result = []
     for c in customers:
         c.pop("_id", None)
-        c["outstanding"] = await customer_outstanding(c["id"])
+        c["outstanding"] = await customer_outstanding(c["id"], user["id"])
         result.append(c)
     return result
 
 
 @api_router.post("/wholesale/customers")
 async def create_customer(data: WholesaleCustomerCreate, user: dict = Depends(get_current_user)):
-    c = {"id": new_id(), "name": data.name, "phone": data.phone,
+    c = {"id": new_id(), "user_id": user["id"], "name": data.name, "phone": data.phone,
          "notes": data.notes, "created_at": now_iso()}
     await db.wholesale_customers.insert_one(c)
     c["outstanding"] = 0.0
@@ -640,9 +649,11 @@ async def create_customer(data: WholesaleCustomerCreate, user: dict = Depends(ge
 
 @api_router.get("/wholesale/supplies")
 async def list_supplies(customer_id: Optional[str] = None, user: dict = Depends(get_current_user)):
-    query = {"customer_id": customer_id} if customer_id else {}
+    query = {"user_id": user["id"]}
+    if customer_id:
+        query["customer_id"] = customer_id
     supplies = await db.wholesale_supplies.find(query).sort("created_at", -1).to_list(5000)
-    names = {c["id"]: c["name"] for c in await db.wholesale_customers.find({}).to_list(2000)}
+    names = {c["id"]: c["name"] for c in await db.wholesale_customers.find({"user_id": user["id"]}).to_list(2000)}
     for s in supplies:
         s.pop("_id", None)
         s["customer_name"] = names.get(s["customer_id"], "—")
@@ -651,11 +662,12 @@ async def list_supplies(customer_id: Optional[str] = None, user: dict = Depends(
 
 @api_router.post("/wholesale/supplies")
 async def create_supply(data: WholesaleSupplyCreate, user: dict = Depends(get_current_user)):
-    cust = await db.wholesale_customers.find_one({"id": data.customer_id})
+    cust = await db.wholesale_customers.find_one({"id": data.customer_id, "user_id": user["id"]})
     if not cust:
         raise HTTPException(status_code=404, detail="Customer not found")
     s = {
         "id": new_id(),
+        "user_id": user["id"],
         "customer_id": data.customer_id,
         "description": data.description,
         "amount": round(data.amount, 2),
@@ -665,14 +677,14 @@ async def create_supply(data: WholesaleSupplyCreate, user: dict = Depends(get_cu
         "created_at": now_iso(),
     }
     await db.wholesale_supplies.insert_one(s)
-    return clean(await db.wholesale_supplies.find_one({"id": s["id"]}))
+    return clean(await db.wholesale_supplies.find_one({"id": s["id"], "user_id": user["id"]}))
 
 
 @api_router.get("/wholesale/payments")
 async def list_wholesale_payments(user: dict = Depends(get_current_user)):
-    payments = await db.wholesale_payments.find({}).sort("created_at", -1).to_list(5000)
-    names = {c["id"]: c["name"] for c in await db.wholesale_customers.find({}).to_list(2000)}
-    accs = {a["id"]: a["name"] for a in await db.accounts.find({}).to_list(1000)}
+    payments = await db.wholesale_payments.find({"user_id": user["id"]}).sort("created_at", -1).to_list(5000)
+    names = {c["id"]: c["name"] for c in await db.wholesale_customers.find({"user_id": user["id"]}).to_list(2000)}
+    accs = {a["id"]: a["name"] for a in await db.accounts.find({"user_id": user["id"]}).to_list(1000)}
     for p in payments:
         p.pop("_id", None)
         p["customer_name"] = names.get(p["customer_id"], "—")
@@ -682,16 +694,17 @@ async def list_wholesale_payments(user: dict = Depends(get_current_user)):
 
 @api_router.post("/wholesale/payments")
 async def create_wholesale_payment(data: WholesalePaymentInput, user: dict = Depends(get_current_user)):
-    cust = await db.wholesale_customers.find_one({"id": data.customer_id})
+    cust = await db.wholesale_customers.find_one({"id": data.customer_id, "user_id": user["id"]})
     if not cust:
         raise HTTPException(status_code=404, detail="Customer not found")
-    acc = await db.accounts.find_one({"id": data.account_id})
+    acc = await db.accounts.find_one({"id": data.account_id, "user_id": user["id"]})
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
     if data.amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be positive")
     p = {
         "id": new_id(),
+        "user_id": user["id"],
         "customer_id": data.customer_id,
         "amount": round(data.amount, 2),
         "account_id": data.account_id,
@@ -703,9 +716,9 @@ async def create_wholesale_payment(data: WholesalePaymentInput, user: dict = Dep
     await record_transaction(
         data.account_id, "wholesale_payment",
         f"Wholesale payment from {cust['name']}", data.amount, "credit",
-        reference_id=p["id"], date=p["date"],
+        reference_id=p["id"], date=p["date"], user_id=user["id"],
     )
-    return clean(await db.wholesale_payments.find_one({"id": p["id"]}))
+    return clean(await db.wholesale_payments.find_one({"id": p["id"], "user_id": user["id"]}))
 
 
 # ---------------------------------------------------------------------------
@@ -713,11 +726,11 @@ async def create_wholesale_payment(data: WholesalePaymentInput, user: dict = Dep
 # ---------------------------------------------------------------------------
 @api_router.get("/creditcards")
 async def list_cards(active: Optional[bool] = None, user: dict = Depends(get_current_user)):
-    query = {}
+    query = {"user_id": user["id"]}
     if active is True:
-        query = {"closed": {"$ne": True}}
+        query["closed"] = {"$ne": True}
     cards = await db.credit_cards.find(query).sort("created_at", -1).to_list(1000)
-    txns = await db.credit_card_txns.find({}).to_list(50000)
+    txns = await db.credit_card_txns.find({"user_id": user["id"]}).to_list(50000)
     paid_by = {}
     for t in txns:
         if t["kind"] in ("payment", "refund"):
@@ -749,18 +762,19 @@ async def list_cards(active: Optional[bool] = None, user: dict = Depends(get_cur
 
 @api_router.patch("/creditcards/{card_id}/close")
 async def toggle_card_close(card_id: str, user: dict = Depends(get_current_user)):
-    card = await db.credit_cards.find_one({"id": card_id})
+    card = await db.credit_cards.find_one({"id": card_id, "user_id": user["id"]})
     if not card:
         raise HTTPException(status_code=404, detail="Card not found")
     new_closed = not bool(card.get("closed", False))
-    await db.credit_cards.update_one({"id": card_id}, {"$set": {"closed": new_closed}})
-    return clean(await db.credit_cards.find_one({"id": card_id}))
+    await db.credit_cards.update_one({"id": card_id, "user_id": user["id"]}, {"$set": {"closed": new_closed}})
+    return clean(await db.credit_cards.find_one({"id": card_id, "user_id": user["id"]}))
 
 
 @api_router.post("/creditcards")
 async def create_card(data: CreditCardCreate, user: dict = Depends(get_current_user)):
     card = {
         "id": new_id(),
+        "user_id": user["id"],
         "name": data.name,
         "bank_name": data.bank_name,
         "last4": (data.last4 or "")[-4:] or None,
@@ -777,13 +791,13 @@ async def create_card(data: CreditCardCreate, user: dict = Depends(get_current_u
     if data.opening_outstanding and data.opening_outstanding > 0:
         amt = round(data.opening_outstanding, 2)
         await db.credit_card_txns.insert_one({
-            "id": new_id(), "card_id": card["id"], "kind": "spend",
+            "id": new_id(), "user_id": user["id"], "card_id": card["id"], "kind": "spend",
             "amount": amt, "account_id": None, "description": "Opening outstanding",
             "category": "expense", "date": now_iso(), "outstanding_after": amt,
             "created_at": now_iso(),
         })
-        await db.credit_cards.update_one({"id": card["id"]}, {"$set": {"outstanding": amt}})
-    return clean(await db.credit_cards.find_one({"id": card["id"]}))
+        await db.credit_cards.update_one({"id": card["id"], "user_id": user["id"]}, {"$set": {"outstanding": amt}})
+    return clean(await db.credit_cards.find_one({"id": card["id"], "user_id": user["id"]}))
 
 
 @api_router.put("/creditcards/{card_id}")
@@ -793,16 +807,16 @@ async def update_card(card_id: str, data: CreditCardUpdate, user: dict = Depends
         updates["last4"] = (updates["last4"] or "")[-4:] or None
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
-    res = await db.credit_cards.update_one({"id": card_id}, {"$set": updates})
+    res = await db.credit_cards.update_one({"id": card_id, "user_id": user["id"]}, {"$set": updates})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Card not found")
-    return clean(await db.credit_cards.find_one({"id": card_id}))
+    return clean(await db.credit_cards.find_one({"id": card_id, "user_id": user["id"]}))
 
 
 @api_router.get("/creditcards/{card_id}/transactions")
 async def card_transactions(card_id: str, user: dict = Depends(get_current_user)):
-    txns = await db.credit_card_txns.find({"card_id": card_id}).sort("created_at", -1).to_list(5000)
-    accs = {a["id"]: a["name"] for a in await db.accounts.find({}).to_list(1000)}
+    txns = await db.credit_card_txns.find({"card_id": card_id, "user_id": user["id"]}).sort("created_at", -1).to_list(5000)
+    accs = {a["id"]: a["name"] for a in await db.accounts.find({"user_id": user["id"]}).to_list(1000)}
     for t in txns:
         t.pop("_id", None)
         t["account_name"] = accs.get(t.get("account_id"), None)
@@ -813,11 +827,11 @@ async def card_transactions(card_id: str, user: dict = Depends(get_current_user)
 async def card_ledger(card_id: str, from_date: Optional[str] = None,
                       to_date: Optional[str] = None, kind: Optional[str] = None,
                       user: dict = Depends(get_current_user)):
-    card = await db.credit_cards.find_one({"id": card_id})
+    card = await db.credit_cards.find_one({"id": card_id, "user_id": user["id"]})
     if not card:
         raise HTTPException(status_code=404, detail="Card not found")
-    all_txns = await db.credit_card_txns.find({"card_id": card_id}).sort("created_at", 1).to_list(10000)
-    accs = {a["id"]: a["name"] for a in await db.accounts.find({}).to_list(1000)}
+    all_txns = await db.credit_card_txns.find({"card_id": card_id, "user_id": user["id"]}).sort("created_at", 1).to_list(10000)
+    accs = {a["id"]: a["name"] for a in await db.accounts.find({"user_id": user["id"]}).to_list(1000)}
     rows = _ledger_rows(all_txns, "running_outstanding", lambda t: t["kind"] == "spend",
                         "kind", kind, from_date, to_date, accs=accs)
     return {"card": clean(card), "transactions": rows}
@@ -825,7 +839,7 @@ async def card_ledger(card_id: str, from_date: Optional[str] = None,
 
 @api_router.post("/creditcards/{card_id}/transactions")
 async def add_card_txn(card_id: str, data: CreditCardTxnInput, user: dict = Depends(get_current_user)):
-    card = await db.credit_cards.find_one({"id": card_id})
+    card = await db.credit_cards.find_one({"id": card_id, "user_id": user["id"]})
     if not card:
         raise HTTPException(status_code=404, detail="Card not found")
     if card.get("closed"):
@@ -849,6 +863,7 @@ async def add_card_txn(card_id: str, data: CreditCardTxnInput, user: dict = Depe
     category = {"spend": "expense", "payment": "payment", "refund": "refund"}[data.kind]
     txn = {
         "id": new_id(),
+        "user_id": user["id"],
         "card_id": card_id,
         "kind": data.kind,
         "amount": round(data.amount, 2),
@@ -863,19 +878,19 @@ async def add_card_txn(card_id: str, data: CreditCardTxnInput, user: dict = Depe
         await record_transaction(
             data.account_id, "cc_payment",
             f"Credit card payment: {card['name']}", data.amount, "debit",
-            reference_id=txn["id"], date=txn["date"],
+            reference_id=txn["id"], date=txn["date"], user_id=user["id"],
         )
     await db.credit_card_txns.insert_one(txn)
-    await db.credit_cards.update_one({"id": card_id}, {"$set": {"outstanding": new_out}})
-    return clean(await db.credit_cards.find_one({"id": card_id}))
+    await db.credit_cards.update_one({"id": card_id, "user_id": user["id"]}, {"$set": {"outstanding": new_out}})
+    return clean(await db.credit_cards.find_one({"id": card_id, "user_id": user["id"]}))
 
 
 @api_router.delete("/creditcards/{card_id}/transactions/{txn_id}")
 async def reverse_card_txn(card_id: str, txn_id: str, user: dict = Depends(get_current_user)):
-    card = await db.credit_cards.find_one({"id": card_id})
+    card = await db.credit_cards.find_one({"id": card_id, "user_id": user["id"]})
     if not card:
         raise HTTPException(status_code=404, detail="Card not found")
-    txn = await db.credit_card_txns.find_one({"id": txn_id, "card_id": card_id})
+    txn = await db.credit_card_txns.find_one({"id": txn_id, "card_id": card_id, "user_id": user["id"]})
     if not txn:
         raise HTTPException(status_code=404, detail="Transaction not found")
     if txn.get("category") == "purchase":
@@ -887,15 +902,15 @@ async def reverse_card_txn(card_id: str, txn_id: str, user: dict = Depends(get_c
         new_out = round(card["outstanding"] + amt, 2)
     # reverse any linked account movement (credit-card bill payment)
     if txn["kind"] == "payment":
-        acc_txns = await db.transactions.find({"reference_id": txn_id}).to_list(100)
+        acc_txns = await db.transactions.find({"reference_id": txn_id, "user_id": user["id"]}).to_list(100)
         for at in acc_txns:
-            acc = await db.accounts.find_one({"id": at["account_id"]})
+            acc = await db.accounts.find_one({"id": at["account_id"], "user_id": user["id"]})
             if acc:
                 delta = at["amount"] if at["direction"] == "debit" else -at["amount"]
-                await db.accounts.update_one({"id": acc["id"]}, {"$set": {"current_balance": round(acc["current_balance"] + delta, 2)}})
-            await db.transactions.delete_one({"id": at["id"]})
-    await db.credit_card_txns.delete_one({"id": txn_id})
-    await db.credit_cards.update_one({"id": card_id}, {"$set": {"outstanding": new_out}})
+                await db.accounts.update_one({"id": acc["id"], "user_id": user["id"]}, {"$set": {"current_balance": round(acc["current_balance"] + delta, 2)}})
+            await db.transactions.delete_one({"id": at["id"], "user_id": user["id"]})
+    await db.credit_card_txns.delete_one({"id": txn_id, "user_id": user["id"]})
+    await db.credit_cards.update_one({"id": card_id, "user_id": user["id"]}, {"$set": {"outstanding": new_out}})
     return {"success": True, "outstanding": new_out}
 
 
@@ -952,11 +967,11 @@ def _build_statement(card: dict, txns: list, accs: dict, from_date, to_date) -> 
 @api_router.get("/creditcards/{card_id}/statement")
 async def card_statement(card_id: str, from_date: Optional[str] = None,
                          to_date: Optional[str] = None, user: dict = Depends(get_current_user)):
-    card = await db.credit_cards.find_one({"id": card_id})
+    card = await db.credit_cards.find_one({"id": card_id, "user_id": user["id"]})
     if not card:
         raise HTTPException(status_code=404, detail="Card not found")
-    txns = await db.credit_card_txns.find({"card_id": card_id}).sort("created_at", 1).to_list(50000)
-    accs = {a["id"]: a["name"] for a in await db.accounts.find({}).to_list(1000)}
+    txns = await db.credit_card_txns.find({"card_id": card_id, "user_id": user["id"]}).sort("created_at", 1).to_list(50000)
+    accs = {a["id"]: a["name"] for a in await db.accounts.find({"user_id": user["id"]}).to_list(1000)}
     return _build_statement(card, txns, accs, from_date, to_date)
 
 
@@ -965,21 +980,21 @@ async def card_statement(card_id: str, from_date: Optional[str] = None,
 # ---------------------------------------------------------------------------
 @api_router.get("/poonji")
 async def list_poonji(user: dict = Depends(get_current_user)):
-    entries = await db.poonji.find({}).sort("created_at", -1).to_list(2000)
+    entries = await db.poonji.find({"user_id": user["id"]}).sort("created_at", -1).to_list(2000)
     return [clean(e) for e in entries]
 
 
 @api_router.post("/poonji")
 async def create_poonji(data: PoonjiCreate, user: dict = Depends(get_current_user)):
-    e = {"id": new_id(), "amount": round(data.amount, 2), "description": data.description,
+    e = {"id": new_id(), "user_id": user["id"], "amount": round(data.amount, 2), "description": data.description,
          "date": data.date or now_iso(), "created_at": now_iso()}
     await db.poonji.insert_one(e)
-    return clean(await db.poonji.find_one({"id": e["id"]}))
+    return clean(await db.poonji.find_one({"id": e["id"], "user_id": user["id"]}))
 
 
 @api_router.delete("/poonji/{entry_id}")
 async def delete_poonji(entry_id: str, user: dict = Depends(get_current_user)):
-    res = await db.poonji.delete_one({"id": entry_id})
+    res = await db.poonji.delete_one({"id": entry_id, "user_id": user["id"]})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Entry not found")
     return {"success": True}
@@ -1045,31 +1060,32 @@ def _profit_metrics(sales: list, supplies: list, expense_txns: list, refund_txns
 
 @api_router.get("/dashboard/summary")
 async def dashboard_summary(user: dict = Depends(get_current_user)):
-    accounts = await db.accounts.find({"active": True}).to_list(1000)
+    uid = user["id"]
+    accounts = await db.accounts.find({"active": True, "user_id": uid}).to_list(1000)
     for a in accounts:
         a.pop("_id", None)
     total_paisa = round(sum(a["current_balance"] for a in accounts), 2)
 
-    supplies = await db.wholesale_supplies.find({}).to_list(10000)
-    payments = await db.wholesale_payments.find({}).to_list(10000)
+    supplies = await db.wholesale_supplies.find({"user_id": uid}).to_list(10000)
+    payments = await db.wholesale_payments.find({"user_id": uid}).to_list(10000)
     receivable = round(sum(s["amount"] for s in supplies) - sum(p["amount"] for p in payments), 2)
 
-    cards = await db.credit_cards.find({}).to_list(1000)
+    cards = await db.credit_cards.find({"user_id": uid}).to_list(1000)
     cm = _credit_metrics(cards)
 
-    poonji_entries = await db.poonji.find({}).to_list(5000)
+    poonji_entries = await db.poonji.find({"user_id": uid}).to_list(5000)
     fixed_poonji = round(sum(e["amount"] for e in poonji_entries), 2)
 
-    all_stock = await db.stock.find({}).to_list(20000)
+    all_stock = await db.stock.find({"user_id": uid}).to_list(20000)
     in_stock = [i for i in all_stock if i.get("status") == "in_stock"]
     stock_value = round(sum(i["purchase_price"] for i in in_stock), 2)
     total_purchase = round(sum(i["purchase_price"] for i in all_stock), 2)
 
     due_reminders = _due_reminders(cm["open_cards"], datetime.now(timezone.utc).date())
 
-    sales = await db.sales.find({}).to_list(20000)
-    expense_txns = await db.credit_card_txns.find({"kind": "spend", "category": "expense"}).to_list(20000)
-    refund_txns = await db.credit_card_txns.find({"kind": "refund"}).to_list(20000)
+    sales = await db.sales.find({"user_id": uid}).to_list(20000)
+    expense_txns = await db.credit_card_txns.find({"kind": "spend", "category": "expense", "user_id": uid}).to_list(20000)
+    refund_txns = await db.credit_card_txns.find({"kind": "refund", "user_id": uid}).to_list(20000)
     pm = _profit_metrics(sales, supplies, expense_txns, refund_txns)
 
     return {
@@ -1115,8 +1131,8 @@ async def profit_report(from_date: Optional[str] = None, to_date: Optional[str] 
             return False
         return True
 
-    sales = [s for s in await db.sales.find({}).to_list(20000) if in_range(s["date"])]
-    supplies = [s for s in await db.wholesale_supplies.find({}).to_list(20000) if in_range(s["date"])]
+    sales = [s for s in await db.sales.find({"user_id": user["id"]}).to_list(20000) if in_range(s["date"])]
+    supplies = [s for s in await db.wholesale_supplies.find({"user_id": user["id"]}).to_list(20000) if in_range(s["date"])]
     for s in sales:
         s.pop("_id", None)
     retail_profit = round(sum(s["profit"] for s in sales), 2)
@@ -1240,18 +1256,12 @@ async def send_email(*, to: str, subject: str, html: str) -> Optional[str]:
         raise HTTPException(status_code=500, detail="Failed to send email")
 
 
-async def _owner_email() -> Optional[str]:
-    """Recipient comes from server-side records only (G4): the owner is the first
-    user created via the setup flow."""
-    owner = await db.users.find_one({}, sort=[("created_at", 1)])
-    return owner.get("email") if owner else None
-
-
-async def _due_cards(within_days: int = 3) -> list:
+async def _due_cards(user_id: str, within_days: int = 3) -> list:
     """Open cards with an outstanding balance whose due date is within `within_days`
-    (includes already-overdue cards). Uses IST 'today' since reminders fire at 9am IST."""
+    (includes already-overdue cards), scoped to one user. Uses IST 'today' since
+    reminders fire at 9am IST."""
     today = datetime.now(IST).date()
-    cards = await db.credit_cards.find({}).to_list(1000)
+    cards = await db.credit_cards.find({"user_id": user_id}).to_list(1000)
     out = []
     for c in cards:
         if c.get("closed") or c.get("outstanding", 0) <= 0 or not c.get("due_date"):
@@ -1310,17 +1320,24 @@ async def _process_reminders(run_id: str, within_days: int = 3) -> None:
         return
     if run_id:
         await db.cron_runs.insert_one({"run_id": run_id, "at": now_iso()})
-    to = await _owner_email()
-    cards = await _due_cards(within_days)
-    if not to or not cards:
-        logger.info(f"Reminder run {run_id}: nothing to send (recipient={bool(to)}, due={len(cards)})")
-        return
-    subject = f"Payment reminder: {len(cards)} credit card due" + ("s" if len(cards) != 1 else "")
-    try:
-        await send_email(to=to, subject=subject, html=_reminder_html(cards))
-        logger.info(f"Reminder run {run_id}: emailed {len(cards)} card(s) to {to}")
-    except Exception as e:
-        logger.error(f"Reminder run {run_id} send failed: {e}")
+    users = await db.users.find({}).to_list(10000)
+    for u in users:
+        to = u.get("email")
+        if not to:
+            continue
+        try:
+            cards = await _due_cards(u["id"], within_days)
+        except Exception as e:
+            logger.error(f"Reminder run {run_id} failed computing due cards for {to}: {e}")
+            continue
+        if not cards:
+            continue
+        subject = f"Payment reminder: {len(cards)} credit card due" + ("s" if len(cards) != 1 else "")
+        try:
+            await send_email(to=to, subject=subject, html=_reminder_html(cards))
+            logger.info(f"Reminder run {run_id}: emailed {len(cards)} card(s) to {to}")
+        except Exception as e:
+            logger.error(f"Reminder run {run_id} send failed for {to}: {e}")
 
 
 @api_router.post("/cron/due-reminders")
@@ -1337,13 +1354,14 @@ async def cron_due_reminders(authorization: Optional[str] = Header(None),
 
 @api_router.post("/reminders/test")
 async def send_test_reminder(user: dict = Depends(get_current_user)):
-    """Owner-triggered test send so the user can verify deliverability. Recipient and
-    body are built server-side (G4). If no card is due within 3 days, sends a short
-    'no dues' confirmation so the email path can still be verified."""
-    to = await _owner_email()
+    """User-triggered test send so they can verify deliverability. Recipient and
+    body are built server-side (G4) from the logged-in user's own record. If no
+    card is due within 3 days, sends a short 'no dues' confirmation so the email
+    path can still be verified."""
+    to = user.get("email")
     if not to:
-        raise HTTPException(status_code=400, detail="No owner email on record")
-    cards = await _due_cards(3)
+        raise HTTPException(status_code=400, detail="No email on record")
+    cards = await _due_cards(user["id"], 3)
     if cards:
         subject = f"Payment reminder: {len(cards)} credit card due" + ("s" if len(cards) != 1 else "")
         html = _reminder_html(cards)
@@ -1368,7 +1386,7 @@ async def send_test_reminder(user: dict = Depends(get_current_user)):
 # ---------------------------------------------------------------------------
 @api_router.get("/settings")
 async def get_settings(user: dict = Depends(get_current_user)):
-    doc = await db.settings.find_one({"id": "business"})
+    doc = await db.settings.find_one({"user_id": user["id"]})
     if not doc:
         return {"id": "business", "business_name": "", "logo_url": ""}
     return clean(doc)
@@ -1377,17 +1395,60 @@ async def get_settings(user: dict = Depends(get_current_user)):
 @api_router.put("/settings")
 async def update_settings(payload: dict, user: dict = Depends(get_current_user)):
     updates = {"business_name": payload.get("business_name", ""), "logo_url": payload.get("logo_url", "")}
-    await db.settings.update_one({"id": "business"}, {"$set": {"id": "business", **updates}}, upsert=True)
-    return clean(await db.settings.find_one({"id": "business"}))
+    await db.settings.update_one({"user_id": user["id"]}, {"$set": {"id": "business", "user_id": user["id"], **updates}}, upsert=True)
+    return clean(await db.settings.find_one({"user_id": user["id"]}))
+
+
+_LEGACY_USER_ID_COLLECTIONS = [
+    "accounts", "transactions", "sales", "stock", "wholesale_customers",
+    "wholesale_supplies", "wholesale_payments", "credit_cards", "credit_card_txns",
+    "poonji", "settings",
+]
+
+
+async def _backfill_legacy_user_id() -> None:
+    """One-time, idempotent migration: this app was single-owner before multi-user
+    support was added, so any document that predates that change has no `user_id`
+    field. All such documents unambiguously belonged to the very first account ever
+    registered (the original owner) — assign them to that user so their existing
+    data isn't orphaned by the new per-user filtering. Safe to run on every startup:
+    once every document has a `user_id`, the queries below match nothing and it's a
+    no-op."""
+    first_user = await db.users.find_one({}, sort=[("created_at", 1)])
+    if not first_user:
+        return
+    owner_id = first_user["id"]
+    for coll_name in _LEGACY_USER_ID_COLLECTIONS:
+        coll = db[coll_name]
+        result = await coll.update_many(
+            {"user_id": {"$exists": False}}, {"$set": {"user_id": owner_id}}
+        )
+        if result.modified_count:
+            logger.info(
+                f"Legacy data migration: backfilled user_id on "
+                f"{result.modified_count} document(s) in '{coll_name}' -> owner {owner_id}"
+            )
 
 
 @app.on_event("startup")
 async def startup():
     await db.accounts.create_index("id", unique=True)
+    await db.accounts.create_index("user_id")
     await db.transactions.create_index("account_id")
+    await db.transactions.create_index("user_id")
     await db.users.create_index("email", unique=True)
-    # No owner is seeded. The first owner is created via the /api/auth/setup
-    # first-time setup flow, so no password is ever hardcoded or exposed.
+    await db.sales.create_index("user_id")
+    await db.stock.create_index("user_id")
+    await db.wholesale_customers.create_index("user_id")
+    await db.wholesale_supplies.create_index("user_id")
+    await db.wholesale_payments.create_index("user_id")
+    await db.credit_cards.create_index("user_id")
+    await db.credit_card_txns.create_index("user_id")
+    await db.poonji.create_index("user_id")
+    await db.settings.create_index("user_id")
+    # Accounts are now created freely by any registered user via /api/auth/register;
+    # there is no single seeded "owner" account.
+    await _backfill_legacy_user_id()
 
 
 @app.on_event("shutdown")

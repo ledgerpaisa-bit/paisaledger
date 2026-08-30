@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate, Navigate } from "react-router-dom";
+import { useNavigate, Navigate, Link } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 import { apiError } from "@/lib/api";
@@ -7,7 +7,7 @@ import { TID } from "@/constants/testIds/app";
 import { Smartphone } from "lucide-react";
 
 export default function Login() {
-  const { user, needsSetup, login } = useAuth();
+  const { user, login } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -15,7 +15,6 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
 
   if (user) return <Navigate to="/" replace />;
-  if (needsSetup === true) return <Navigate to="/setup" replace />;
 
   const submit = async (e) => {
     e.preventDefault();
@@ -91,6 +90,12 @@ export default function Login() {
             >
               {loading ? "Signing in…" : "Sign in"}
             </button>
+            <p className="text-sm text-slate-500 text-center pt-2">
+              Don't have an account?{" "}
+              <Link to="/setup" className="text-blue-600 font-semibold hover:underline">
+                Sign up
+              </Link>
+            </p>
           </form>
         </div>
       </div>

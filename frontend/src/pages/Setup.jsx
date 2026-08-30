@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { useNavigate, Navigate } from "react-router-dom";
+import { useNavigate, Navigate, Link } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 import { apiError } from "@/lib/api";
-import { Smartphone, ShieldCheck, Check, X } from "lucide-react";
+import { Smartphone, UserPlus, Check, X } from "lucide-react";
 
 const TID = {
   name: "setup-name-input",
@@ -21,7 +21,7 @@ const Rule = ({ ok, label }) => (
 );
 
 export default function Setup() {
-  const { user, needsSetup, setup } = useAuth();
+  const { user, setup } = useAuth();
   const navigate = useNavigate();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -31,7 +31,6 @@ export default function Setup() {
   const [loading, setLoading] = useState(false);
 
   if (user) return <Navigate to="/" replace />;
-  if (needsSetup === false) return <Navigate to="/login" replace />;
 
   const lenOk = password.length >= 8;
   const matchOk = confirm.length > 0 && password === confirm;
@@ -45,7 +44,7 @@ export default function Setup() {
     setLoading(true);
     try {
       await setup(email, password, name);
-      toast.success("Owner account created!");
+      toast.success("Account created!");
       navigate("/");
     } catch (err) {
       const msg = apiError(err, "Setup failed");
@@ -70,13 +69,13 @@ export default function Setup() {
           </div>
 
           <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded px-2 py-1 mb-4">
-            <ShieldCheck size={14} /> First-time setup
+            <UserPlus size={14} /> Create your account
           </div>
           <h1 className="font-display font-black text-3xl text-slate-900 tracking-tight">
-            Create owner account
+            Sign up
           </h1>
           <p className="text-sm text-slate-500 mt-2 mb-8">
-            No owner exists yet. Set your own secure credentials — your password is hashed and never stored in plain text.
+            Create your own account to track your business — your data stays private to you, and your password is hashed and never stored in plain text.
           </p>
 
           <form onSubmit={submit} className="space-y-4">
@@ -88,7 +87,7 @@ export default function Setup() {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 className="w-full h-11 px-3 rounded-md border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600 transition-colors"
-                placeholder="Owner name"
+                placeholder="Your name"
               />
             </div>
             <div>
@@ -149,6 +148,12 @@ export default function Setup() {
             >
               {loading ? "Creating…" : "Create account & continue"}
             </button>
+            <p className="text-sm text-slate-500 text-center pt-2">
+              Already have an account?{" "}
+              <Link to="/login" className="text-blue-600 font-semibold hover:underline">
+                Sign in
+              </Link>
+            </p>
           </form>
         </div>
       </div>
@@ -165,7 +170,7 @@ export default function Setup() {
             Your business,<br />your keys.
           </div>
           <p className="text-slate-200 mt-3 max-w-md">
-            Set up your private owner account. Only you can access the console after this.
+            Create your own private account. Only you can access your own data.
           </p>
         </div>
       </div>
