@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from "@/context/AuthContext";
 import Layout from "@/components/Layout";
 import Login from "@/pages/Login";
 import Setup from "@/pages/Setup";
+import OAuthCallback from "@/pages/OAuthCallback";
 import Dashboard from "@/pages/Dashboard";
 import Accounts from "@/pages/Accounts";
 import AccountLedger from "@/pages/AccountLedger";
@@ -38,6 +39,7 @@ function App() {
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/setup" element={<Setup />} />
+            <Route path="/oauth-callback" element={<OAuthCallback />} />
             <Route
               path="/"
               element={

@@ -1,18 +1,27 @@
-import { useState } from "react";
-import { useNavigate, Navigate, Link } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useNavigate, useSearchParams, Navigate, Link } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 import { apiError } from "@/lib/api";
 import { TID } from "@/constants/testIds/app";
 import { Smartphone } from "lucide-react";
+import SocialAuthButtons from "@/components/SocialAuthButtons";
 
 export default function Login() {
   const { user, login } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (searchParams.get("error")) {
+      toast.error("Sign-in failed. Please try again.");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (user) return <Navigate to="/" replace />;
 
@@ -49,6 +58,14 @@ export default function Login() {
           <p className="text-sm text-slate-500 mt-2 mb-8">
             Access your business balance & profit console.
           </p>
+
+          <SocialAuthButtons />
+
+          <div className="flex items-center gap-3 my-6">
+            <div className="h-px bg-slate-200 flex-1" />
+            <span className="text-xs text-slate-400">OR</span>
+            <div className="h-px bg-slate-200 flex-1" />
+          </div>
 
           <form onSubmit={submit} className="space-y-4">
             <div>

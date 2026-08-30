@@ -43,15 +43,38 @@ export const AuthProvider = ({ children }) => {
     return res.data.user;
   }, []);
 
+  // Two-step, OTP-verified signup: request a code, then verify it to actually
+  // create the account.
+  const requestSignupOtp = useCallback(async (email, password, name) => {
+    const res = await api.post("/auth/register/request-otp", { email, password, name });
+    return res.data;
+  }, []);
+
+  const verifySignupOtp = useCallback(async (email, otp) => {
+    const res = await api.post("/auth/register/verify-otp", { email, otp });
+    localStorage.setItem("mbt_token", res.data.access_token);
+    setUser(res.data.user);
+    return res.data.user;
+  }, []);
+
   const logout = useCallback(() => {
     localStorage.removeItem("mbt_token");
     setUser(false);
     window.location.href = "/login";
   }, []);
 
+  // Used by the OAuth callback page: the backend already minted a JWT after a
+  // successful Google/Facebook/Apple sign-in, we just need to adopt it.
+  const loginWithToken = useCallback(async (token) => {
+    localStorage.setItem("mbt_token", token);
+    const res = await api.get("/auth/me");
+    setUser(res.data);
+    return res.data;
+  }, []);
+
   const value = useMemo(
-    () => ({ user, loading, login, setup, logout }),
-    [user, loading, login, setup, logout]
+    () => ({ user, loading, login, setup, logout, loginWithToken, requestSignupOtp, verifySignupOtp }),
+    [user, loading, login, setup, logout, loginWithToken, requestSignupOtp, verifySignupOtp]
   );
 
   return (

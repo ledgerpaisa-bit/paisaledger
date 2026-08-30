@@ -6,6 +6,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Query
+from fastapi.responses import RedirectResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, ConfigDict, EmailStr
@@ -14,8 +15,11 @@ from datetime import datetime, timezone, timedelta
 from bson import ObjectId
 import logging
 import uuid
+import secrets
 import bcrypt
 import jwt
+from jwt.algorithms import RSAAlgorithm
+import json
 import re
 import hmac
 import asyncio
@@ -23,7 +27,7 @@ import ipaddress
 import httpx
 from html import escape
 from html.parser import HTMLParser
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlencode
 from fastapi import Header
 
 # ---------------------------------------------------------------------------
@@ -103,6 +107,17 @@ class SetupInput(BaseModel):
     email: EmailStr
     password: str
     name: Optional[str] = None
+
+
+class SignupOtpRequest(BaseModel):
+    email: EmailStr
+    password: str
+    name: Optional[str] = None
+
+
+class SignupOtpVerify(BaseModel):
+    email: EmailStr
+    otp: str
 
 
 class AccountCreate(BaseModel):
@@ -305,11 +320,111 @@ async def register(data: SetupInput):
 api_router.add_api_route("/auth/setup", register, methods=["POST"])
 
 
+# ---------------------------------------------------------------------------
+# Email-verified signup (OTP): the frontend uses this two-step flow instead of
+# /auth/register directly, so an account only gets created once the person has
+# proven they own the email address.
+# ---------------------------------------------------------------------------
+OTP_TTL_MINUTES = 10
+OTP_RESEND_COOLDOWN_SECONDS = 45
+OTP_MAX_ATTEMPTS = 5
+
+
+def _generate_otp() -> str:
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def _otp_email_html(otp: str) -> str:
+    return (
+        f'<table role="presentation" width="100%" style="max-width:480px"><tr><td '
+        f'style="padding:24px;font-family:Arial,sans-serif;color:#0f172a">'
+        f'<h2 style="margin:0 0 8px">Verify your email</h2>'
+        f'<p style="color:#475569;margin:0 0 20px">Use this code to finish creating your account. '
+        f'It expires in {OTP_TTL_MINUTES} minutes.</p>'
+        f'<div style="font-size:32px;font-weight:bold;letter-spacing:8px;text-align:center;'
+        f'background:#f1f5f9;border-radius:8px;padding:16px;margin-bottom:20px">{escape(otp)}</div>'
+        f'<p style="font-size:12px;color:#94a3b8">Sent by {escape(EMAIL_FROM_NAME)}. If you did not request this, '
+        f'you can safely ignore this email. We never ask for your password or card details by email.</p>'
+        f'</td></tr></table>'
+    )
+
+
+@api_router.post("/auth/register/request-otp")
+async def request_signup_otp(data: SignupOtpRequest):
+    email = data.email.lower()
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(status_code=409, detail="An account with this email already exists. Please sign in.")
+    if len(data.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters long")
+    now = datetime.now(timezone.utc)
+    existing = await db.pending_signups.find_one({"email": email})
+    if existing and existing.get("last_sent_at"):
+        elapsed = (now - datetime.fromisoformat(existing["last_sent_at"])).total_seconds()
+        if elapsed < OTP_RESEND_COOLDOWN_SECONDS:
+            wait = int(OTP_RESEND_COOLDOWN_SECONDS - elapsed)
+            raise HTTPException(status_code=429, detail=f"Please wait {wait}s before requesting another code")
+    otp = _generate_otp()
+    record = {
+        "email": email,
+        "password_hash": hash_password(data.password),
+        "name": (data.name or "").strip() or "Owner",
+        "otp": otp,
+        "expires_at": (now + timedelta(minutes=OTP_TTL_MINUTES)).isoformat(),
+        "last_sent_at": now.isoformat(),
+        "attempts": 0,
+    }
+    try:
+        await send_email(to=email, subject="Your verification code", html=_otp_email_html(otp))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Signup OTP email failed for {email}: {e}")
+        raise HTTPException(status_code=502, detail="Could not send the verification email. Please try again.")
+    await db.pending_signups.update_one({"email": email}, {"$set": record}, upsert=True)
+    return {"status": "sent", "email": email, "expires_in_minutes": OTP_TTL_MINUTES}
+
+
+@api_router.post("/auth/register/verify-otp")
+async def verify_signup_otp(data: SignupOtpVerify):
+    email = data.email.lower()
+    pending = await db.pending_signups.find_one({"email": email})
+    if not pending:
+        raise HTTPException(status_code=400, detail="No pending signup found for this email. Please start again.")
+    if datetime.fromisoformat(pending["expires_at"]) < datetime.now(timezone.utc):
+        await db.pending_signups.delete_one({"email": email})
+        raise HTTPException(status_code=400, detail="This code has expired. Please request a new one.")
+    if pending.get("attempts", 0) >= OTP_MAX_ATTEMPTS:
+        await db.pending_signups.delete_one({"email": email})
+        raise HTTPException(status_code=429, detail="Too many incorrect attempts. Please request a new code.")
+    if data.otp.strip() != pending["otp"]:
+        await db.pending_signups.update_one({"email": email}, {"$inc": {"attempts": 1}})
+        raise HTTPException(status_code=400, detail="Incorrect code")
+    if await db.users.find_one({"email": email}):
+        await db.pending_signups.delete_one({"email": email})
+        raise HTTPException(status_code=409, detail="An account with this email already exists. Please sign in.")
+    user = {
+        "id": new_id(),
+        "email": email,
+        "password_hash": pending["password_hash"],
+        "name": pending["name"],
+        "role": "owner",
+        "created_at": now_iso(),
+    }
+    await db.users.insert_one(user)
+    await db.pending_signups.delete_one({"email": email})
+    token = create_access_token(user["id"], user["email"])
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {"id": user["id"], "email": user["email"], "name": user["name"]},
+    }
+
+
 @api_router.post("/auth/login")
 async def login(data: LoginInput):
     email = data.email.lower()
     user = await db.users.find_one({"email": email})
-    if not user or not verify_password(data.password, user["password_hash"]):
+    if not user or not user.get("password_hash") or not verify_password(data.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     token = create_access_token(user["id"], user["email"])
     return {
@@ -327,6 +442,239 @@ async def me(user: dict = Depends(get_current_user)):
 @api_router.post("/auth/logout")
 async def logout(user: dict = Depends(get_current_user)):
     return {"success": True}
+
+
+# ---------------------------------------------------------------------------
+# Social login (Google / Facebook / Sign in with Apple)
+# ---------------------------------------------------------------------------
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+FACEBOOK_CLIENT_ID = os.environ.get("FACEBOOK_CLIENT_ID")
+FACEBOOK_CLIENT_SECRET = os.environ.get("FACEBOOK_CLIENT_SECRET")
+APPLE_CLIENT_ID = os.environ.get("APPLE_CLIENT_ID")  # the Services ID, e.g. com.paisaledger.web
+APPLE_TEAM_ID = os.environ.get("APPLE_TEAM_ID")
+APPLE_KEY_ID = os.environ.get("APPLE_KEY_ID")
+APPLE_PRIVATE_KEY = os.environ.get("APPLE_PRIVATE_KEY", "").replace("\\n", "\n")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://paisaledger-coral.vercel.app")
+BACKEND_PUBLIC_URL = os.environ.get("BACKEND_PUBLIC_URL", "https://paisaledger.onrender.com")
+OAUTH_STATE_COOKIE = "oauth_state"
+
+
+def _oauth_redirect_uri(provider: str) -> str:
+    return f"{BACKEND_PUBLIC_URL}/api/auth/{provider}/callback"
+
+
+def _set_oauth_state_cookie(resp: RedirectResponse, state: str) -> None:
+    # samesite="none" so the cookie still comes back on Apple's cross-site form POST
+    # callback, not just Google/Facebook's GET redirect.
+    resp.set_cookie(OAUTH_STATE_COOKIE, state, max_age=600, httponly=True, secure=True, samesite="none")
+
+
+async def _oauth_login_user(email: str, name: str = "") -> str:
+    """Find or create a user by email for a social sign-in, and return a fresh JWT.
+    Safe to call for both a brand-new signup and a returning user (same email links
+    the accounts, whether they originally signed up with a password or another
+    provider)."""
+    email = email.lower()
+    user = await db.users.find_one({"email": email})
+    if not user:
+        user = {
+            "id": new_id(),
+            "email": email,
+            "password_hash": None,
+            "name": (name or "").strip() or "Owner",
+            "role": "owner",
+            "created_at": now_iso(),
+        }
+        await db.users.insert_one(user)
+    return create_access_token(user["id"], user["email"])
+
+
+def _apple_client_secret() -> str:
+    now = datetime.now(timezone.utc)
+    payload = {
+        "iss": APPLE_TEAM_ID,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=20)).timestamp()),
+        "aud": "https://appleid.apple.com",
+        "sub": APPLE_CLIENT_ID,
+    }
+    return jwt.encode(payload, APPLE_PRIVATE_KEY, algorithm="ES256", headers={"kid": APPLE_KEY_ID})
+
+
+@api_router.get("/auth/google/login")
+async def google_login():
+    if not (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET):
+        raise HTTPException(status_code=503, detail="Google sign-in is not configured")
+    state = new_id()
+    params = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": _oauth_redirect_uri("google"),
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "access_type": "online",
+        "prompt": "select_account",
+    }
+    resp = RedirectResponse("https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params))
+    _set_oauth_state_cookie(resp, state)
+    return resp
+
+
+@api_router.get("/auth/google/callback")
+async def google_callback(request: Request, code: Optional[str] = None, state: Optional[str] = None,
+                           error: Optional[str] = None):
+    cookie_state = request.cookies.get(OAUTH_STATE_COOKIE)
+    if error or not code or not state or not cookie_state or state != cookie_state:
+        return RedirectResponse(f"{FRONTEND_URL}/login?error=google_auth_failed")
+    try:
+        async with httpx.AsyncClient(timeout=15) as http:
+            token_resp = await http.post("https://oauth2.googleapis.com/token", data={
+                "client_id": GOOGLE_CLIENT_ID,
+                "client_secret": GOOGLE_CLIENT_SECRET,
+                "code": code,
+                "redirect_uri": _oauth_redirect_uri("google"),
+                "grant_type": "authorization_code",
+            })
+            token_resp.raise_for_status()
+            access_token = token_resp.json()["access_token"]
+            info_resp = await http.get("https://www.googleapis.com/oauth2/v3/userinfo",
+                                        headers={"Authorization": f"Bearer {access_token}"})
+            info_resp.raise_for_status()
+            info = info_resp.json()
+        email = info.get("email")
+        if not email:
+            return RedirectResponse(f"{FRONTEND_URL}/login?error=google_no_email")
+        jwt_token = await _oauth_login_user(email, info.get("name", ""))
+    except Exception as e:
+        logger.error(f"Google OAuth callback failed: {e}")
+        return RedirectResponse(f"{FRONTEND_URL}/login?error=google_auth_failed")
+    resp = RedirectResponse(f"{FRONTEND_URL}/oauth-callback?token={jwt_token}")
+    resp.delete_cookie(OAUTH_STATE_COOKIE)
+    return resp
+
+
+@api_router.get("/auth/facebook/login")
+async def facebook_login():
+    if not (FACEBOOK_CLIENT_ID and FACEBOOK_CLIENT_SECRET):
+        raise HTTPException(status_code=503, detail="Facebook sign-in is not configured")
+    state = new_id()
+    params = {
+        "client_id": FACEBOOK_CLIENT_ID,
+        "redirect_uri": _oauth_redirect_uri("facebook"),
+        "response_type": "code",
+        "scope": "email,public_profile",
+        "state": state,
+    }
+    resp = RedirectResponse("https://www.facebook.com/v19.0/dialog/oauth?" + urlencode(params))
+    _set_oauth_state_cookie(resp, state)
+    return resp
+
+
+@api_router.get("/auth/facebook/callback")
+async def facebook_callback(request: Request, code: Optional[str] = None, state: Optional[str] = None,
+                             error: Optional[str] = None):
+    cookie_state = request.cookies.get(OAUTH_STATE_COOKIE)
+    if error or not code or not state or not cookie_state or state != cookie_state:
+        return RedirectResponse(f"{FRONTEND_URL}/login?error=facebook_auth_failed")
+    try:
+        async with httpx.AsyncClient(timeout=15) as http:
+            token_resp = await http.get("https://graph.facebook.com/v19.0/oauth/access_token", params={
+                "client_id": FACEBOOK_CLIENT_ID,
+                "client_secret": FACEBOOK_CLIENT_SECRET,
+                "code": code,
+                "redirect_uri": _oauth_redirect_uri("facebook"),
+            })
+            token_resp.raise_for_status()
+            access_token = token_resp.json()["access_token"]
+            info_resp = await http.get("https://graph.facebook.com/me", params={
+                "fields": "id,name,email",
+                "access_token": access_token,
+            })
+            info_resp.raise_for_status()
+            info = info_resp.json()
+        email = info.get("email")
+        if not email:
+            return RedirectResponse(f"{FRONTEND_URL}/login?error=facebook_no_email")
+        jwt_token = await _oauth_login_user(email, info.get("name", ""))
+    except Exception as e:
+        logger.error(f"Facebook OAuth callback failed: {e}")
+        return RedirectResponse(f"{FRONTEND_URL}/login?error=facebook_auth_failed")
+    resp = RedirectResponse(f"{FRONTEND_URL}/oauth-callback?token={jwt_token}")
+    resp.delete_cookie(OAUTH_STATE_COOKIE)
+    return resp
+
+
+@api_router.get("/auth/apple/login")
+async def apple_login():
+    if not (APPLE_CLIENT_ID and APPLE_TEAM_ID and APPLE_KEY_ID and APPLE_PRIVATE_KEY):
+        raise HTTPException(status_code=503, detail="Sign in with Apple is not configured")
+    state = new_id()
+    params = {
+        "client_id": APPLE_CLIENT_ID,
+        "redirect_uri": _oauth_redirect_uri("apple"),
+        "response_type": "code",
+        "response_mode": "form_post",
+        "scope": "name email",
+        "state": state,
+    }
+    resp = RedirectResponse("https://appleid.apple.com/auth/authorize?" + urlencode(params))
+    _set_oauth_state_cookie(resp, state)
+    return resp
+
+
+@api_router.post("/auth/apple/callback")
+async def apple_callback(request: Request):
+    # Apple posts back (response_mode=form_post) rather than redirecting with a GET.
+    form = await request.form()
+    code = form.get("code")
+    state = form.get("state")
+    error = form.get("error")
+    cookie_state = request.cookies.get(OAUTH_STATE_COOKIE)
+    if error or not code or not state or not cookie_state or state != cookie_state:
+        return RedirectResponse(f"{FRONTEND_URL}/login?error=apple_auth_failed", status_code=303)
+    try:
+        client_secret = _apple_client_secret()
+        async with httpx.AsyncClient(timeout=15) as http:
+            token_resp = await http.post("https://appleid.apple.com/auth/token", data={
+                "client_id": APPLE_CLIENT_ID,
+                "client_secret": client_secret,
+                "code": code,
+                "redirect_uri": _oauth_redirect_uri("apple"),
+                "grant_type": "authorization_code",
+            })
+            token_resp.raise_for_status()
+            id_token = token_resp.json()["id_token"]
+            jwks_resp = await http.get("https://appleid.apple.com/auth/keys")
+            jwks_resp.raise_for_status()
+            jwks = jwks_resp.json()["keys"]
+        unverified_header = jwt.get_unverified_header(id_token)
+        key_data = next((k for k in jwks if k["kid"] == unverified_header["kid"]), None)
+        if not key_data:
+            raise ValueError("Apple signing key not found")
+        public_key = RSAAlgorithm.from_jwk(json.dumps(key_data))
+        claims = jwt.decode(id_token, key=public_key, algorithms=["RS256"], audience=APPLE_CLIENT_ID)
+        email = claims.get("email")
+        if not email:
+            return RedirectResponse(f"{FRONTEND_URL}/login?error=apple_no_email", status_code=303)
+        # Apple only ever sends the user's name once, on the very first authorization,
+        # as a JSON blob in the `user` form field.
+        name = ""
+        user_field = form.get("user")
+        if user_field:
+            try:
+                u = json.loads(user_field)
+                n = u.get("name") or {}
+                name = " ".join(filter(None, [n.get("firstName"), n.get("lastName")]))
+            except Exception:
+                pass
+        jwt_token = await _oauth_login_user(email, name)
+    except Exception as e:
+        logger.error(f"Apple OAuth callback failed: {e}")
+        return RedirectResponse(f"{FRONTEND_URL}/login?error=apple_auth_failed", status_code=303)
+    resp = RedirectResponse(f"{FRONTEND_URL}/oauth-callback?token={jwt_token}", status_code=303)
+    resp.delete_cookie(OAUTH_STATE_COOKIE)
+    return resp
 
 
 # ---------------------------------------------------------------------------
@@ -1437,6 +1785,7 @@ async def startup():
     await db.transactions.create_index("account_id")
     await db.transactions.create_index("user_id")
     await db.users.create_index("email", unique=True)
+    await db.pending_signups.create_index("email", unique=True)
     await db.sales.create_index("user_id")
     await db.stock.create_index("user_id")
     await db.wholesale_customers.create_index("user_id")
