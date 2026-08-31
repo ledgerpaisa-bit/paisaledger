@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, ConfigDict, EmailStr
 from typing import List, Optional, Literal, Annotated, Any
 from datetime import datetime, timezone, timedelta
 from bson import ObjectId
+from collections import defaultdict
 import logging
 import uuid
 import secrets
@@ -1224,6 +1225,49 @@ def _credit_metrics(cards: list) -> dict:
     }
 
 
+def _wholesale_by_shop(supplies: list, payments: list, customers: list) -> list:
+    """Per-shop Wholesale Outstanding (Receivable) for the Dashboard's per-shop
+    breakdown card. Only shops that currently owe something are included,
+    highest outstanding first."""
+    names = {c["id"]: c["name"] for c in customers}
+    supply_by_cust = defaultdict(float)
+    for s in supplies:
+        supply_by_cust[s["customer_id"]] += s["amount"]
+    paid_by_cust = defaultdict(float)
+    for p in payments:
+        paid_by_cust[p["customer_id"]] += p["amount"]
+    rows = []
+    for cust_id, total_supply in supply_by_cust.items():
+        outstanding = round(total_supply - paid_by_cust.get(cust_id, 0), 2)
+        if outstanding > 0.001:
+            rows.append({"customer_id": cust_id, "name": names.get(cust_id, "Shop"), "outstanding": outstanding})
+    rows.sort(key=lambda r: r["outstanding"], reverse=True)
+    return rows
+
+
+def _card_summary_rows(open_cards: list) -> list:
+    """Per-card outstanding/limit for the Dashboard's Credit Card Summary
+    (name, bank, outstanding vs limit, utilization %), highest outstanding first."""
+    rows = []
+    for c in open_cards:
+        limit = c.get("limit", 0) or 0
+        outstanding = c.get("outstanding", 0) or 0
+        utilization = round((outstanding / limit * 100), 1) if limit > 0 else 0.0
+        rows.append({
+            "id": c["id"],
+            "name": c.get("name") or "Card",
+            "bank_name": c.get("bank_name"),
+            "last4": c.get("last4"),
+            "outstanding": round(outstanding, 2),
+            "limit": round(limit, 2),
+            "utilization": utilization,
+            "due_date": c.get("due_date"),
+            "min_due": round(c.get("min_due", 0) or 0, 2),
+        })
+    rows.sort(key=lambda r: r["outstanding"], reverse=True)
+    return rows
+
+
 def _due_reminders(open_cards: list, today_date) -> list:
     """Cards with an outstanding balance due within the next 7 days (incl. overdue)."""
     reminders = []
@@ -1242,6 +1286,45 @@ def _due_reminders(open_cards: list, today_date) -> list:
                     "overdue": days_left < 0, "days_left": days_left,
                 })
     return reminders
+
+
+def _detect_brand(model: str) -> str:
+    """Best-effort brand from a free-text mobile_model string (e.g. "iPhone 13
+    Pro" -> "iPhone"). Falls back to "Others" when nothing recognisable matches,
+    and folds sub-brands (Redmi/Poco) under their parent (Xiaomi)."""
+    m = (model or "").strip().lower()
+    if not m:
+        return "Others"
+    display = {
+        "iphone": "iPhone", "samsung": "Samsung", "oneplus": "OnePlus",
+        "redmi": "Xiaomi", "poco": "Xiaomi", "xiaomi": "Xiaomi", "vivo": "Vivo",
+        "oppo": "Oppo", "realme": "Realme", "motorola": "Motorola",
+        "nothing": "Nothing", "pixel": "Google", "google": "Google", "asus": "Asus",
+        "nokia": "Nokia", "infinix": "Infinix", "tecno": "Tecno", "lava": "Lava",
+        "micromax": "Micromax", "honor": "Honor", "iqoo": "iQOO",
+    }
+    for k, label in display.items():
+        if m == k or m.startswith(k + " ") or f" {k}" in m:
+            return label
+    return "Others"
+
+
+def _stock_by_brand(in_stock: list) -> list:
+    """Brand-wise Stock Value Summary: distinct models, unit count and total
+    purchase value per brand, largest value first."""
+    groups = defaultdict(lambda: {"models": set(), "units": 0, "value": 0.0})
+    for item in in_stock:
+        brand = _detect_brand(item.get("mobile_model", ""))
+        g = groups[brand]
+        g["models"].add((item.get("mobile_model") or "").strip())
+        g["units"] += 1
+        g["value"] += item.get("purchase_price", 0)
+    rows = [
+        {"brand": brand, "models": len(g["models"]), "units": g["units"], "value": round(g["value"], 2)}
+        for brand, g in groups.items()
+    ]
+    rows.sort(key=lambda r: r["value"], reverse=True)
+    return rows
 
 
 def _profit_metrics(sales: list, supplies: list, expense_txns: list, refund_txns: list) -> dict:
@@ -1272,9 +1355,12 @@ async def dashboard_summary(user: dict = Depends(get_current_user)):
     supplies = await db.wholesale_supplies.find({"user_id": uid}).to_list(10000)
     payments = await db.wholesale_payments.find({"user_id": uid}).to_list(10000)
     receivable = round(sum(s["amount"] for s in supplies) - sum(p["amount"] for p in payments), 2)
+    wholesale_customers = await db.wholesale_customers.find({"user_id": uid}).to_list(2000)
+    wholesale_by_shop = _wholesale_by_shop(supplies, payments, wholesale_customers)
 
     cards = await db.credit_cards.find({"user_id": uid}).to_list(1000)
     cm = _credit_metrics(cards)
+    card_summary = _card_summary_rows(cm["open_cards"])
 
     poonji_entries = await db.poonji.find({"user_id": uid}).to_list(5000)
     fixed_poonji = round(sum(e["amount"] for e in poonji_entries), 2)
@@ -1282,6 +1368,7 @@ async def dashboard_summary(user: dict = Depends(get_current_user)):
     all_stock = await db.stock.find({"user_id": uid}).to_list(20000)
     in_stock = [i for i in all_stock if i.get("status") == "in_stock"]
     stock_value = round(sum(i["purchase_price"] for i in in_stock), 2)
+    stock_by_brand = _stock_by_brand(in_stock)
     total_purchase = round(sum(i["purchase_price"] for i in all_stock), 2)
 
     due_reminders = _due_reminders(cm["open_cards"], datetime.now(timezone.utc).date())
@@ -1301,6 +1388,7 @@ async def dashboard_summary(user: dict = Depends(get_current_user)):
         "upi_accounts": [a for a in accounts if a["type"] == "upi"],
         "cash_accounts": [a for a in accounts if a["type"] == "cash"],
         "wholesale_receivable": receivable,
+        "wholesale_by_shop": wholesale_by_shop,
         "credit_card_outstanding": cm["cc_outstanding"],
         "open_card_outstanding": cm["open_card_outstanding"],
         "credit_limit_total": cm["credit_limit_total"],
@@ -1308,10 +1396,12 @@ async def dashboard_summary(user: dict = Depends(get_current_user)):
         "credit_utilization": cm["credit_utilization"],
         "upcoming_due_amount": cm["upcoming_due_amount"],
         "due_reminders": due_reminders,
+        "card_summary": card_summary,
         "fixed_poonji": fixed_poonji,
         "stock_value": stock_value,
         "stock_count": len(in_stock),
         "total_stock_units": len(in_stock),
+        "stock_by_brand": stock_by_brand,
         "total_purchase": total_purchase,
         "retail_profit": pm["retail_profit"],
         "retail_sales_total": pm["retail_sales_total"],
