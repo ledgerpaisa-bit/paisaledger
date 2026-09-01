@@ -17,6 +17,9 @@ import CreditCardLedger from "@/pages/CreditCardLedger";
 import Poonji from "@/pages/Poonji";
 import Profit from "@/pages/Profit";
 import Settings from "@/pages/Settings";
+import StaffLogin from "@/pages/StaffLogin";
+import BillingCounter from "@/pages/BillingCounter";
+import BillReceipt from "@/pages/BillReceipt";
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -40,6 +43,9 @@ function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/setup" element={<Setup />} />
             <Route path="/oauth-callback" element={<OAuthCallback />} />
+            <Route path="/staff-login" element={<StaffLogin />} />
+            <Route path="/billing" element={<BillingCounter />} />
+            <Route path="/bills/:id/receipt" element={<BillReceipt />} />
             <Route
               path="/"
               element={

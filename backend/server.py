@@ -75,6 +75,17 @@ def create_access_token(user_id: str, email: str) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
+def create_staff_token(staff_id: str, owner_id: str, username: str) -> str:
+    payload = {
+        "sub": staff_id,
+        "owner_id": owner_id,
+        "username": username,
+        "exp": datetime.now(timezone.utc) + timedelta(days=7),
+        "type": "staff",
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
 async def get_current_user(request: Request) -> dict:
     auth_header = request.headers.get("Authorization", "")
     token = auth_header[7:] if auth_header.startswith("Bearer ") else None
@@ -92,6 +103,39 @@ async def get_current_user(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+
+async def get_billing_actor(request: Request) -> dict:
+    """Accepts either the owner's normal login token or a staff PIN-login token.
+    Used only on the billing-counter routes so shop staff can create bills without
+    getting access to any other part of the app. Returns the tenant to scope data
+    to (`user_id`) plus attribution info for staff-created bills."""
+    auth_header = request.headers.get("Authorization", "")
+    token = auth_header[7:] if auth_header.startswith("Bearer ") else None
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    if payload.get("type") == "staff":
+        staff = await db.staff.find_one({"id": payload.get("sub"), "user_id": payload.get("owner_id")})
+        if not staff or not staff.get("active", True):
+            raise HTTPException(status_code=401, detail="Staff account not found or deactivated")
+        return {
+            "user_id": staff["user_id"],
+            "actor_type": "staff",
+            "staff_id": staff["id"],
+            "staff_name": staff.get("name") or staff["username"],
+        }
+
+    user = await db.users.find_one({"id": payload.get("sub")})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return {"user_id": user["id"], "actor_type": "owner", "staff_id": None, "staff_name": None}
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +275,36 @@ class PoonjiCreate(BaseModel):
     amount: float
     description: str
     date: Optional[str] = None
+
+
+class StaffCreate(BaseModel):
+    username: str
+    pin: str
+    name: Optional[str] = None
+
+
+class StaffUpdate(BaseModel):
+    name: Optional[str] = None
+    pin: Optional[str] = None
+    active: Optional[bool] = None
+
+
+class StaffLoginInput(BaseModel):
+    username: str
+    pin: str
+
+
+class BillItemInput(BaseModel):
+    stock_item_id: str
+    sale_price: float
+
+
+class BillCreateInput(BaseModel):
+    items: List[BillItemInput]
+    account_id: str
+    customer_name: Optional[str] = None
+    date: Optional[str] = None
+    notes: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1681,15 +1755,29 @@ async def send_test_reminder(user: dict = Depends(get_current_user)):
 async def get_settings(user: dict = Depends(get_current_user)):
     doc = await db.settings.find_one({"user_id": user["id"]})
     if not doc:
-        return {"id": "business", "business_name": "", "logo_url": ""}
+        return {"id": "business", "business_name": "", "logo_url": "", "gst_number": ""}
+    doc.setdefault("gst_number", "")
     return clean(doc)
 
 
 @api_router.put("/settings")
 async def update_settings(payload: dict, user: dict = Depends(get_current_user)):
-    updates = {"business_name": payload.get("business_name", ""), "logo_url": payload.get("logo_url", "")}
+    updates = {
+        "business_name": payload.get("business_name", ""),
+        "logo_url": payload.get("logo_url", ""),
+        "gst_number": payload.get("gst_number", ""),
+    }
     await db.settings.update_one({"user_id": user["id"]}, {"$set": {"id": "business", "user_id": user["id"], **updates}}, upsert=True)
     return clean(await db.settings.find_one({"user_id": user["id"]}))
+
+
+@api_router.get("/billing/business")
+async def billing_business_info(actor: dict = Depends(get_billing_actor)):
+    """Lightweight, receipt-only view of the shop's branding — usable by staff
+    too (unlike /settings, which is owner-only), and deliberately excludes
+    anything beyond what a printed receipt needs."""
+    doc = await db.settings.find_one({"user_id": actor["user_id"]}) or {}
+    return {"business_name": doc.get("business_name", ""), "gst_number": doc.get("gst_number", "")}
 
 
 _LEGACY_USER_ID_COLLECTIONS = [
@@ -1723,6 +1811,227 @@ async def _backfill_legacy_user_id() -> None:
             )
 
 
+# ---------------------------------------------------------------------------
+# Staff (restricted billing-counter login), managed by the shop owner
+# ---------------------------------------------------------------------------
+_USERNAME_RE = re.compile(r"^[a-z0-9_]{3,20}$")
+_PIN_RE = re.compile(r"^\d{4,6}$")
+
+
+@api_router.post("/staff")
+async def create_staff(data: StaffCreate, user: dict = Depends(get_current_user)):
+    username = data.username.strip().lower()
+    if not _USERNAME_RE.match(username):
+        raise HTTPException(status_code=400, detail="Username must be 3-20 characters: lowercase letters, numbers, underscore only")
+    if not _PIN_RE.match(data.pin):
+        raise HTTPException(status_code=400, detail="PIN must be 4 to 6 digits")
+    existing = await db.staff.find_one({"username": username})
+    if existing:
+        raise HTTPException(status_code=409, detail="This username is already taken. Choose another.")
+    staff = {
+        "id": new_id(),
+        "user_id": user["id"],
+        "username": username,
+        "pin_hash": hash_password(data.pin),
+        "name": (data.name or username).strip(),
+        "active": True,
+        "created_at": now_iso(),
+    }
+    await db.staff.insert_one(staff)
+    staff.pop("pin_hash", None)
+    return clean(staff)
+
+
+@api_router.get("/staff")
+async def list_staff(user: dict = Depends(get_current_user)):
+    rows = await db.staff.find({"user_id": user["id"]}).sort("created_at", 1).to_list(500)
+    for r in rows:
+        r.pop("_id", None)
+        r.pop("pin_hash", None)
+    return rows
+
+
+@api_router.put("/staff/{staff_id}")
+async def update_staff(staff_id: str, data: StaffUpdate, user: dict = Depends(get_current_user)):
+    staff = await db.staff.find_one({"id": staff_id, "user_id": user["id"]})
+    if not staff:
+        raise HTTPException(status_code=404, detail="Staff account not found")
+    updates = {}
+    if data.name is not None:
+        updates["name"] = data.name.strip() or staff["username"]
+    if data.active is not None:
+        updates["active"] = data.active
+    if data.pin is not None:
+        if not _PIN_RE.match(data.pin):
+            raise HTTPException(status_code=400, detail="PIN must be 4 to 6 digits")
+        updates["pin_hash"] = hash_password(data.pin)
+    if updates:
+        await db.staff.update_one({"id": staff_id, "user_id": user["id"]}, {"$set": updates})
+    row = await db.staff.find_one({"id": staff_id, "user_id": user["id"]})
+    row.pop("_id", None)
+    row.pop("pin_hash", None)
+    return row
+
+
+@api_router.delete("/staff/{staff_id}")
+async def delete_staff(staff_id: str, user: dict = Depends(get_current_user)):
+    result = await db.staff.delete_one({"id": staff_id, "user_id": user["id"]})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Staff account not found")
+    return {"ok": True}
+
+
+@api_router.post("/auth/staff/login")
+async def staff_login(data: StaffLoginInput):
+    username = data.username.strip().lower()
+    staff = await db.staff.find_one({"username": username})
+    if not staff or not verify_password(data.pin, staff["pin_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid username or PIN")
+    if not staff.get("active", True):
+        raise HTTPException(status_code=403, detail="This staff account has been deactivated. Contact the shop owner.")
+    token = create_staff_token(staff["id"], staff["user_id"], staff["username"])
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "staff": {"id": staff["id"], "username": staff["username"], "name": staff.get("name") or staff["username"]},
+    }
+
+
+# ---------------------------------------------------------------------------
+# Billing counter (multi-item bills) - usable by the owner or by staff
+# ---------------------------------------------------------------------------
+@api_router.get("/billing/stock")
+async def billing_list_stock(q: Optional[str] = None, actor: dict = Depends(get_billing_actor)):
+    items = await db.stock.find({"user_id": actor["user_id"], "status": "in_stock"}).sort("created_at", -1).to_list(5000)
+    items = [clean(i) for i in items]
+    if q:
+        ql = q.strip().lower()
+        items = [i for i in items if ql in (i.get("mobile_model") or "").lower() or ql in (i.get("imei") or "").lower()]
+    return items
+
+
+@api_router.get("/billing/accounts")
+async def billing_list_accounts(actor: dict = Depends(get_billing_actor)):
+    accounts = await db.accounts.find({"user_id": actor["user_id"]}).sort("created_at", 1).to_list(200)
+    return [{"id": a["id"], "name": a["name"], "type": a["type"]} for a in accounts]
+
+
+async def _next_bill_number(user_id: str) -> int:
+    last = await db.bills.find_one({"user_id": user_id}, sort=[("bill_number", -1)])
+    return (last["bill_number"] + 1) if last else 1
+
+
+@api_router.post("/bills")
+async def create_bill(data: BillCreateInput, actor: dict = Depends(get_billing_actor)):
+    if not data.items:
+        raise HTTPException(status_code=400, detail="Add at least one item to the bill")
+    user_id = actor["user_id"]
+    acc = await db.accounts.find_one({"id": data.account_id, "user_id": user_id})
+    if not acc:
+        raise HTTPException(status_code=404, detail="Payment account not found")
+
+    bill_date = data.date or now_iso()
+    resolved_items = []
+    total = 0.0
+    for it in data.items:
+        stock_item = await db.stock.find_one({"id": it.stock_item_id, "user_id": user_id})
+        if not stock_item:
+            raise HTTPException(status_code=404, detail="One of the selected items was not found")
+        if stock_item.get("status") != "in_stock":
+            raise HTTPException(status_code=400, detail=f"{stock_item.get('mobile_model')} is already sold / not in stock")
+        if it.sale_price <= 0:
+            raise HTTPException(status_code=400, detail="Sale price must be greater than zero")
+        resolved_items.append((it, stock_item))
+        total += it.sale_price
+    total = round(total, 2)
+
+    bill_id = new_id()
+    bill_number = await _next_bill_number(user_id)
+    sale_ids = []
+    items_summary = []
+    for it, stock_item in resolved_items:
+        profit = round(it.sale_price - stock_item["purchase_price"], 2)
+        sale = {
+            "id": new_id(),
+            "user_id": user_id,
+            "mobile_model": stock_item["mobile_model"],
+            "imei": stock_item.get("imei"),
+            "sale_price": round(it.sale_price, 2),
+            "cost_price": stock_item["purchase_price"],
+            "profit": profit,
+            "account_id": data.account_id,
+            "stock_item_id": stock_item["id"],
+            "date": bill_date,
+            "notes": data.notes,
+            "bill_id": bill_id,
+            "created_at": now_iso(),
+        }
+        await db.sales.insert_one(sale)
+        await db.stock.update_one(
+            {"id": stock_item["id"], "user_id": user_id},
+            {"$set": {"status": "sold", "sale_id": sale["id"]}},
+        )
+        sale_ids.append(sale["id"])
+        items_summary.append({
+            "stock_item_id": stock_item["id"],
+            "mobile_model": stock_item["mobile_model"],
+            "imei": stock_item.get("imei"),
+            "sale_price": round(it.sale_price, 2),
+        })
+
+    bill = {
+        "id": bill_id,
+        "user_id": user_id,
+        "bill_number": bill_number,
+        "customer_name": data.customer_name,
+        "items": items_summary,
+        "total_amount": total,
+        "account_id": data.account_id,
+        "sale_ids": sale_ids,
+        "date": bill_date,
+        "notes": data.notes,
+        "created_by": actor["actor_type"],
+        "staff_id": actor.get("staff_id"),
+        "staff_name": actor.get("staff_name"),
+        "created_at": now_iso(),
+    }
+    await db.bills.insert_one(bill)
+
+    item_count = len(items_summary)
+    label = f"Bill #{bill_number}: {item_count} item" + ("s" if item_count != 1 else "") + (f" - {data.customer_name}" if data.customer_name else "")
+    await record_transaction(
+        data.account_id, "bill_sale", label, total, "credit",
+        reference_id=bill_id, date=bill_date, user_id=user_id,
+    )
+    return clean(await db.bills.find_one({"id": bill_id, "user_id": user_id}))
+
+
+@api_router.get("/bills")
+async def list_bills(actor: dict = Depends(get_billing_actor)):
+    query = {"user_id": actor["user_id"]}
+    if actor["actor_type"] == "staff":
+        query["staff_id"] = actor["staff_id"]
+    bills = await db.bills.find(query).sort("created_at", -1).to_list(2000)
+    accounts = {a["id"]: a["name"] for a in await db.accounts.find({"user_id": actor["user_id"]}).to_list(1000)}
+    for b in bills:
+        b.pop("_id", None)
+        b["account_name"] = accounts.get(b.get("account_id"), "-")
+    return bills
+
+
+@api_router.get("/bills/{bill_id}")
+async def get_bill(bill_id: str, actor: dict = Depends(get_billing_actor)):
+    bill = await db.bills.find_one({"id": bill_id, "user_id": actor["user_id"]})
+    if not bill:
+        raise HTTPException(status_code=404, detail="Bill not found")
+    if actor["actor_type"] == "staff" and bill.get("staff_id") != actor["staff_id"]:
+        raise HTTPException(status_code=404, detail="Bill not found")
+    bill.pop("_id", None)
+    acc = await db.accounts.find_one({"id": bill.get("account_id"), "user_id": actor["user_id"]})
+    bill["account_name"] = acc["name"] if acc else "-"
+    return bill
+
+
 @app.on_event("startup")
 async def startup():
     await db.accounts.create_index("id", unique=True)
@@ -1740,6 +2049,10 @@ async def startup():
     await db.credit_card_txns.create_index("user_id")
     await db.poonji.create_index("user_id")
     await db.settings.create_index("user_id")
+    await db.staff.create_index("username", unique=True)
+    await db.staff.create_index("user_id")
+    await db.bills.create_index("user_id")
+    await db.bills.create_index("staff_id")
     # Accounts are now created freely by any registered user via /api/auth/register;
     # there is no single seeded "owner" account.
     await _backfill_legacy_user_id()

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Link, Outlet, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
   Package,
@@ -13,6 +13,7 @@ import {
   PiggyBank,
   TrendingUp,
   FileText,
+  Receipt,
   Settings,
   LogOut,
   Menu,
@@ -37,6 +38,8 @@ const NAV = [
   { to: "/settings", label: "Settings", icon: Settings, key: "settings" },
 ];
 
+const BILLING_LINK = { to: "/billing", label: "Billing Counter", icon: Receipt, key: "billing" };
+
 export default function Layout() {
   const { user, logout } = useAuth();
   const [open, setOpen] = useState(false);
@@ -50,6 +53,15 @@ export default function Layout() {
         <div className="text-xs text-slate-400 mt-1">Balance & Profit</div>
       </div>
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+        <Link
+          to={BILLING_LINK.to}
+          data-testid={TID.nav(BILLING_LINK.key)}
+          className="flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-colors text-slate-300 hover:bg-slate-800 hover:text-white"
+        >
+          <Receipt size={18} strokeWidth={2} />
+          {BILLING_LINK.label}
+        </Link>
+        <div className="h-px bg-slate-800 my-2" />
         {NAV.map((item) => {
           const Icon = item.icon;
           return (

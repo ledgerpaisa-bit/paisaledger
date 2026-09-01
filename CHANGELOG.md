@@ -2,6 +2,18 @@
 
 All notable changes to Paisa Ledger are logged here — one entry per branch/merge, newest first.
 
+## 2026-08-31 — branch `staff-billing-counter`
+
+- New feature: a **Billing Counter** so the app can be handed to shop staff (or used by other shopkeepers who license this app) for day-to-day retail billing, without giving out the owner's full login.
+- **Multi-item bills**: one bill can now contain multiple mobiles (e.g. 2 phones in one sale). Completing a bill deducts each item from stock in one go, records one profit-tracked `sales` entry per item (reusing the existing Retail Sale profit logic), and credits ONE combined payment to the chosen Cash/Bank/UPI account — matching how a real shop counter sale works.
+  - Backend: new `bills` collection (`bill_number`, `items`, `total_amount`, `account_id`, linked `sale_ids`, `staff_id`/`staff_name` attribution) and `POST /api/bills` (all-or-nothing validation before any stock is touched), plus `GET /api/bills` and `GET /api/bills/{id}` for reprinting a receipt later.
+- **Separate staff login**: shop owner creates staff accounts from Settings with a simple username + 4-6 digit PIN (no email/OTP). Staff sign in at `/staff-login` and land only on the Billing Counter — they cannot reach the Dashboard, Reports, Settings or any other owner-only route.
+  - Backend: new `staff` collection (globally-unique username, bcrypt-hashed PIN, active flag, scoped to the owner's `user_id`) with owner-only CRUD (`POST/GET/PUT/DELETE /api/staff`) and a dedicated `POST /api/auth/staff/login` that issues a role-restricted JWT (`type: staff`). A new `get_billing_actor` dependency accepts either the owner's normal token or a staff token on billing routes only; the existing `get_current_user` dependency guarding every other route rejects staff tokens outright (staff `sub` doesn't resolve to a `users` document), so a stolen staff token cannot reach owner data. New `GET /api/billing/stock` and `GET /api/billing/accounts` give staff just enough read access (in-stock items to search, account names to pick from) without exposing account balances or anything else.
+  - Owner can deactivate/re-activate a staff login and reset a forgotten PIN from Settings; a deactivated account is blocked at login (403) immediately.
+- **Printable/shareable receipt**: completing a bill opens a clean printable receipt (`/bills/:id/receipt`) with a Print button (browser print-to-PDF, so it can be shared on WhatsApp). Both the owner (via a new "Billing Counter" sidebar link) and staff can create bills and reprint receipts; staff only ever see their own bills.
+- Verified end-to-end in the sandbox against an in-memory mock DB: owner signup → create staff → staff PIN login → staff creates a 2-item bill → both stock items marked sold → account balance credited with the combined total → owner-only route correctly rejects the staff token → deactivate/reactivate/PIN-reset/duplicate-username edge cases all behave as expected.
+- Why: user wants to eventually give this app to other mobile shopkeepers, with their shop staff able to bill customers at the counter without owner-level access.
+
 ## 2026-08-31 — branch `dashboard-brand-stock-summary`
 
 - Added a brand-wise "Stock Value Summary" table to the Dashboard, matching the reference mockup: groups in-stock items by brand (detected from the free-text mobile model name — iPhone, Samsung, OnePlus, Xiaomi/Redmi/Poco, Vivo, Oppo, Realme, Motorola, Nothing, Google/Pixel, and others fall under "Others") and shows distinct models, unit count and total purchase value per brand, sorted by value.
