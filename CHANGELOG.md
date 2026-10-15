@@ -2,6 +2,14 @@
 
 All notable changes to Paisa Ledger are logged here — one entry per branch/merge, newest first.
 
+## 2026-10-15 — branch `pwa-install`
+
+- Made the live React app **installable** ("Add to Home Screen" on Android/iPhone, "Install app" in Chrome/Edge on Mac and Windows, "Add to Dock" in Safari on Mac).
+  - Added `frontend/public/manifest.json` (name "Paisa Ledger", standalone display, theme colour), own ₹ icon set (`frontend/public/icons/`, incl. maskable + Apple touch icon) and `favicon.ico`.
+  - Added `frontend/public/sw.js`, a small service worker (registered in `frontend/src/index.js`, production build only) that caches just the app shell and hashed `/static/` files. It never touches `/api` calls or other origins, so business data is always live from the server; page navigations are network-first so a new deploy shows up immediately.
+  - `frontend/public/index.html`: manifest/icon/Apple meta tags, theme colour `#2563eb`, page title changed from "Emergent | Fullstack App" to "Paisa Ledger" (this is also the installed window's title).
+  - Requires HTTPS (or localhost) to be installable — the hosted site normally is. Not tested on a real device in the authoring sandbox.
+
 ## 2026-08-31 — branch `staff-billing-counter`
 
 - New feature: a **Billing Counter** so the app can be handed to shop staff (or used by other shopkeepers who license this app) for day-to-day retail billing, without giving out the owner's full login.

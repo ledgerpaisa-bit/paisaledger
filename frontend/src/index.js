@@ -21,3 +21,11 @@ root.render(
     </QueryClientProvider>
   </React.StrictMode>,
 );
+
+// Register the service worker (production build only) so the app can be installed
+// to the home screen / desktop. See public/sw.js.
+if ("serviceWorker" in navigator && process.env.NODE_ENV === "production") {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register(`${process.env.PUBLIC_URL}/sw.js`).catch(() => {});
+  });
+}
